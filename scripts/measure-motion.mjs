@@ -237,6 +237,11 @@ async function jitter(run) {
  */
 async function node(run) {
     const summary = {};
+    // A --check run (CI, SwiftShader) only needs the node's bars: it skips
+    // three's runs and the un-driven rows, and shortens the track to its two
+    // dolly segments (several renders per tick still change history there).
+    const quick = cli.check === true;
+    const threeRun = (request) => (quick ? Promise.resolve(null) : run(request));
     const header = '  scene/object/segment              px moved   three err   node err  >0.25px  >1px';
     const row = (label, three, ours) => {
         summary[label] = { three: three?.candidates[1].error ?? null, node: ours?.candidates[1].error ?? null, motion: ours?.motion ?? null };
@@ -248,22 +253,24 @@ async function node(run) {
     };
     console.log(header);
     for (const scene of ['deformers', 'cases', 'water']) {
-        const three = await run({ scene });
+        const three = await threeRun({ scene });
         const ours = await run({ scene, motion: 'node' });
         for (const name of Object.values(ours.objects)) {
             if (scene === 'cases' && name !== 'static') {
-                const threeSegments = bySegment(three.frames, three.segments);
+                const threeSegments = three ? bySegment(three.frames, three.segments) : null;
                 bySegment(ours.frames, ours.segments).forEach((segment, i) =>
-                    row(`${scene} ${name} ${segment.name}`, compareSummary(threeSegments[i].frames, name), compareSummary(segment.frames, name)),
+                    row(`${scene} ${name} ${segment.name}`, threeSegments && compareSummary(threeSegments[i].frames, name), compareSummary(segment.frames, name)),
                 );
-            } else row(`${scene} ${name}`, compareSummary(three.frames, name), compareSummary(ours.frames, name));
+            } else row(`${scene} ${name}`, three && compareSummary(three.frames, name), compareSummary(ours.frames, name));
         }
     }
-    for (const rendersPerTick of [1, 2, 4]) {
-        const pick = (result) => compareSummary(result.frames.filter((frame) => isMotion(frame.segment) && !frame.segment.startsWith('scene')), 'static');
-        const three = await run({ scene: 'track', rendersPerTick });
-        const ours = await run({ scene: 'track', rendersPerTick, motion: 'node' });
+    const trackEnd = quick ? 175 : undefined;
+    for (const rendersPerTick of quick ? [2] : [1, 2, 4]) {
+        const pick = (result) => result && compareSummary(result.frames.filter((frame) => isMotion(frame.segment) && !frame.segment.startsWith('scene')), 'static');
+        const three = await threeRun({ scene: 'track', rendersPerTick, end: trackEnd });
+        const ours = await run({ scene: 'track', rendersPerTick, motion: 'node', end: trackEnd });
         row(`track ${rendersPerTick} render(s)/tick`, pick(three), pick(ours));
+        if (quick) continue;
         // Not driven: the node on three's frame counter, as an app that never calls beginFrame().
         const undriven = await run({ scene: 'track', rendersPerTick, motion: 'node', driven: false });
         const label = `track ${rendersPerTick}/tick, no beginFrame`;
@@ -275,8 +282,8 @@ async function node(run) {
         }
     }
     {
-        const pick = (result) => compareSummary(result.frames.filter((frame) => frame.jittered), 'static');
-        const three = await run({ scene: 'track', end: 29, jitter: 10, velocityProjection: 'trap', fresh: true });
+        const pick = (result) => result && compareSummary(result.frames.filter((frame) => frame.jittered), 'static');
+        const three = await threeRun({ scene: 'track', end: 29, jitter: 10, velocityProjection: 'trap', fresh: true });
         const ours = await run({ scene: 'track', end: 29, jitter: 10, motion: 'node', fresh: true });
         row('track jitter on (three: trap)', pick(three), pick(ours));
     }

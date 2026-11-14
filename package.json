@@ -39,7 +39,7 @@
         "test": "vitest run",
         "lab": "vite --config lab/vite.config.ts",
         "measure": "node scripts/measure-motion.mjs",
-        "check:gpu": "node scripts/measure-motion.mjs --experiments oracle,cases,jitter --check",
+        "check:gpu": "node scripts/measure-motion.mjs --experiments oracle,cases,jitter,node --check",
         "verify:pack": "node scripts/verify-pack.mjs"
     },
     "peerDependencies": {

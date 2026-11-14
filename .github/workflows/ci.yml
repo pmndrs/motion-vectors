@@ -34,9 +34,14 @@ jobs:
   # the oracle and motion from depth must agree where three is exact. Real-GPU
   # numbers (docs/MOTION.md) come from local runs.
   conformance:
-    name: conformance (SwiftShader)
+    name: conformance (SwiftShader, ${{ matrix.experiments }})
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
+    # Two shards in parallel: the oracle's full camera track alone is ~11 min on SwiftShader.
+    strategy:
+      fail-fast: false
+      matrix:
+        experiments: [oracle, 'cases,jitter,node']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -44,19 +49,19 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      # Chrome for Testing, as the downsampler's SwiftShader CI uses: the runner's
-      # preinstalled google-chrome lost its WebGPU instance mid-run.
+      # Chrome for Testing (current stable), as the downsampler's SwiftShader CI uses,
+      # so runs don't drift with the runner image's preinstalled Chrome.
       - name: Install Chrome for Testing
         run: |
           path=$(npx -y @puppeteer/browsers@2 install chrome@stable --path "$RUNNER_TEMP/cft" --format '{{path}}')
           echo "CHROME_PATH=$path" >> "$GITHUB_ENV"
           "$path" --version
       - name: Lab conformance check
-        run: npm run check:gpu -- --adapter swiftshader --width 640 --height 360 --label ci
+        run: node scripts/measure-motion.mjs --check --experiments ${{ matrix.experiments }} --adapter swiftshader --width 640 --height 360 --label ci
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: conformance
+          name: conformance-${{ strategy.job-index }}
           path: results/ci
           if-no-files-found: warn
           retention-days: 14
