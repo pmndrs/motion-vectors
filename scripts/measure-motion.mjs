@@ -337,6 +337,8 @@ async function main() {
                 '--force-device-scale-factor=1',
                 ...(cli.adapter === 'swiftshader' ? ['--use-webgpu-adapter=swiftshader', '--enable-unsafe-swiftshader', '--enable-features=Vulkan'] : []),
                 ...(process.env.CI ? ['--no-sandbox'] : []),
+                // Extra Chrome flags (space-separated), e.g. the compositor backend headless Linux needs.
+                ...(process.env.CHROME_FLAGS ?? '').split(' ').filter(Boolean),
                 'about:blank',
             ],
             // Chrome's own stderr (GPU process crashes, Dawn errors) goes to a file next to the results.
