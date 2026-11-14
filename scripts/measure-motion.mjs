@@ -351,7 +351,8 @@ async function main() {
         await Promise.all([client.send('Page.enable'), client.send('Runtime.enable'), client.send('Log.enable')]);
         // Pin the viewport to the canvas, or headless Chrome clips its bottom rows.
         await client.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
-        await client.send('Page.navigate', { url: `${server.origin}/index.html` });
+        // Screenshots need the canvas; a --check run only reads GPU buffers, so it skips the present (lab main.ts).
+        await client.send('Page.navigate', { url: `${server.origin}/index.html${cli.check ? '?present=0' : ''}` });
         for (let attempt = 0; ; attempt++) {
             if ((await client.evaluate('window.__motionLab?.ready === true')) === true) break;
             if (attempt > 600) throw new Error(`Timed out waiting for the motion lab.\n${logs(client).join('\n')}`);
@@ -369,6 +370,7 @@ async function main() {
             return result.result.value;
         };
         const screenshot = async (name) => {
+            if (cli.check) return; // nothing is presented in a check run
             const shot = await client.send('Page.captureScreenshot', { format: 'png', clip: { x: 0, y: 0, width, height, scale: 1 } });
             await writeFile(join(outputDirectory, `${name}.png`), Buffer.from(shot.data, 'base64'));
         };

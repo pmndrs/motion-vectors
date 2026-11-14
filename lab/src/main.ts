@@ -180,7 +180,15 @@ function applyJitter(frame: number, width: number, height: number): void {
     camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
 }
 
+/**
+ * `?present=0` skips the on-screen draw. Headless Linux Chrome (CI) can't create
+ * a canvas swapchain image on SwiftShader and loses the WebGPU instance at the
+ * first present; every measurement reads back from GPU buffers, not the canvas.
+ */
+const PRESENT = new URLSearchParams(location.search).get('present') !== '0';
+
 function present(view: LabView, color: THREE.Texture, width: number, height: number): void {
+    if (!PRESENT) return;
     quadMaterial.colorNode = texture(view === 'output' ? color : analyzer.debugTexture(width, height).handle);
     quadMaterial.needsUpdate = true;
     renderer.toneMapping = view === 'output' ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
