@@ -31,6 +31,7 @@
  * Writes results/<label>/<experiment>.json + PNGs (gitignored).
  */
 import { spawn } from 'node:child_process';
+import { openSync } from 'node:fs';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -338,7 +339,8 @@ async function main() {
                 ...(process.env.CI ? ['--no-sandbox'] : []),
                 'about:blank',
             ],
-            { stdio: ['ignore', 'ignore', 'ignore'] },
+            // Chrome's own stderr (GPU process crashes, Dawn errors) goes to a file next to the results.
+            { stdio: ['ignore', 'ignore', openSync(join(outputDirectory, 'chrome.log'), 'w')] },
         );
         const cdpBase = `http://127.0.0.1:${port}`;
         await waitForUrl(`${cdpBase}/json/version`);
@@ -360,7 +362,8 @@ async function main() {
                 { expression: `window.__motionLab.run(${JSON.stringify({ width, height, ...request })})`, awaitPromise: true, returnByValue: true },
                 30 * 60 * 1000,
             );
-            if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text);
+            if (result.exceptionDetails)
+                throw new Error(`${result.exceptionDetails.exception?.description ?? result.exceptionDetails.text}\n${logs(client).slice(-40).join('\n')}`);
             return result.result.value;
         };
         const screenshot = async (name) => {
