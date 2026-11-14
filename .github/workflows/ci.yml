@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    name: typecheck, test, build, pack
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npm run verify:pack
+
+  # The lab's conformance bars (CONTRACT.md) on software WebGPU: three's velocity,
+  # the oracle and motion from depth must agree where three is exact. Real-GPU
+  # numbers (docs/MOTION.md) come from local runs.
+  conformance:
+    name: conformance (SwiftShader)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Lab conformance check
+        run: npm run check:gpu -- --adapter swiftshader --width 640 --height 360 --label ci
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: conformance
+          path: results/ci
+          if-no-files-found: warn
+          retention-days: 14

@@ -1,10 +1,9 @@
 import * as THREE from 'three/webgpu';
 
-import type { TextureAllocator } from '../../src/index';
+import type { TextureAllocator } from '../webgpu/textures.js';
 
-// Copied glue (MOTION-VECTORS-PLAN §3.4), the same as the upscaler's
-// internal/threeWebGPU.ts + textureAllocator.ts. It becomes the /three
-// subpath's allocator after extraction.
+// Glue shared in spirit (copied, not imported) with the upscaler's
+// internal/threeWebGPU.ts + textureAllocator.ts (docs/PLAN.md §3.4).
 
 /**
  * The raw `GPUTexture` behind a three texture (three internals, r184–r186).

@@ -9,7 +9,7 @@ const MOVE_FRAMES = 60;
 const MOVE_DISTANCE = 2;
 
 /**
- * The plan's "moves, then holds" oracle cases (MOTION-VECTORS-PLAN §4), still
+ * The plan's "moves, then holds" oracle cases (docs/PLAN.md §4), still
  * camera: during the move every object has a per-frame step, during the hold
  * the correct motion is exactly zero.
  * 1 a box moved A→B by `material.positionNode`, 2 a morph weight ramp 0→1,

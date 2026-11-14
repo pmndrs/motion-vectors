@@ -1,12 +1,10 @@
 # Motion vectors — spec and plan
 
-**Status (2026-11-14): Phase 1 done; Phase E (extraction) is next.** Phase 0
-and 1 ran here; everything after them runs in the new repo,
-[pmndrs/motion-vectors](https://github.com/pmndrs/motion-vectors) (created
-2026-11-14, private and empty until Phase E), published as
-`@pmndrs/motion-vectors`. The evidence this plan
-builds on is the motion lab, [MOTION.md](MOTION.md). Nothing here ships in the
-published `@pmndrs/upscaler`.
+**Status (2026-11-14): Phase E (extraction) in progress.** Phases 0 and 1 ran
+incubating in [pmndrs/upscaler](https://github.com/pmndrs/upscaler); this repo
+took them over with their history and now builds on three **r187**. It will
+publish as `@pmndrs/motion-vectors` at gate P. The evidence this plan builds on
+is the motion lab, [MOTION.md](MOTION.md).
 
 ## 1. Why a shared package, in its own repo
 
@@ -62,8 +60,7 @@ through dependencies instead.
 
 ### 3.1 Motion contract
 
-The maintained draft is [`packages/motion/CONTRACT.md`](../../packages/motion/CONTRACT.md)
-(Phase 1), which adds the frame semantics and the oracle conformance bars. The
+The maintained draft is [`CONTRACT.md`](../CONTRACT.md) (Phase 1), which adds the frame semantics and the oracle conformance bars. The
 table below is its summary.
 
 | Property | Contract |
@@ -73,7 +70,7 @@ table below is its summary.
 | Format | `rgba16float` at render resolution. `.xy` carries motion; `.zw` are reserved (see below) and consumers must ignore them. |
 | Meaning | For each pixel: where the surface point under it was on screen last frame. Not "where the pixel's colour came from" (that's shading motion, out of contract). |
 | Unknown | A point with no previous position (it was behind the previous camera, or newly spawned) reports **0** and must be flagged in `.z` once the flag is specified. |
-| Per engine | Engines whose native convention differs (Babylon: linear `0.5·(prev − cur)`, Y-flipped render targets) are documented with their `motionScale`. The source today is the upscaler's [engine-contract.md](../engine-contract.md); its motion part moves to the new repo at extraction. |
+| Per engine | Engines whose native convention differs (Babylon: linear `0.5·(prev − cur)`, Y-flipped render targets) are documented with their `motionScale`. The source today is the upscaler's [engine-contract.md](https://github.com/pmndrs/upscaler/blob/main/docs/engine-contract.md); its motion part moves into CONTRACT.md. |
 
 Reserved channels: `.z` is a confidence/source flag (exact geometric, depth-derived
 camera-only, estimated), `.w` is the previous linear depth. Both are specified
@@ -152,9 +149,7 @@ file) rather than writing its own reductions.
 
 ## 4. Acceptance harness
 
-The motion lab (`packages/motion/lab/`, driven by
-`packages/motion/scripts/measure-motion.mjs`; it moves to the new repo as is) is
-the oracle. Every requirement passes only on a measured number.
+The motion lab (`lab/`, driven by `scripts/measure-motion.mjs`) is the oracle. Every requirement passes only on a measured number.
 
 Built in Phase 1, each with a **hand-written oracle velocity** (the correct
 previous position written analytically for that scene) scored as endpoint error
@@ -181,26 +176,26 @@ three cut frames there and on none of the camera track's.
 
 ## 5. Code layout
 
-**Until extraction (after Phase 1, here):** everything that moves is under one folder.
-
 ```
-packages/motion/src/        → the new repo's src/ (core + /webgpu)
-packages/motion/lab/        → its lab (own scenes, oracle, three glue)
-packages/motion/scripts/    → its driver + copied CDP helpers
-packages/motion/CONTRACT.md → its contract
+src/index.ts          @pmndrs/motion-vectors        contract constants, CPU reference math
+src/webgpu/           @pmndrs/motion-vectors/webgpu MotionAnalyzer + WGSL passes, texture allocator
+src/three/            @pmndrs/motion-vectors/three  three glue; the velocity node lands here (Phase 2)
+lab/                  the acceptance harness: own scenes + oracle materials (Vite, :5611)
+scripts/              measure-motion.mjs (CDP driver, --check), verify-pack.mjs, lib/ (copied CDP helpers)
+test/                 GPU-free unit tests (vitest)
+CONTRACT.md           the motion contract (ships in the tarball)
+docs/                 MOTION.md (findings), PLAN.md (this plan)
 ```
 
-- Nothing under `packages/motion` imports the upscaler (`@pmndrs/upscaler*`,
-  `bench/`, the upscaler's `scripts/`); an eslint rule enforces it. Small glue
-  (texture allocator, GPU-texture lookup, CDP helpers) is copied.
-- The upscaler keeps its consumer side: `bench/motion-upscaler.html` and
-  `scripts/measure-motion-upscaler.mjs` (warping error on upscaled output, cut
-  resets), importing the package like any consumer.
-- Nothing in the published upscaler `dist/` touches it.
-
-**After extraction:** the new repo in the §3.4 shape. The upscaler keeps no copy;
-its bench takes the package as a dev dependency, and only takes it as a peer
-dependency once it ships a feature that uses it.
+- npm, `tsc` to `dist/` (ESM, `.js` specifiers), no runtime dependencies;
+  `three` an optional peer (≥ 0.184), pinned to 0.187.0 for development.
+- CI: typecheck → unit tests → build → `verify:pack`, then the lab's
+  conformance check (`oracle`, `cases`, `jitter`) on SwiftShader at 640×360
+  (about 5 min). Real-GPU runs stay local (`npm run measure`).
+- The upscaler keeps its consumer side (`bench/motion-upscaler.html`,
+  `scripts/measure-motion-upscaler.mjs`: warping error on upscaled output, cut
+  resets) on a frozen copy of `src/` until 0.x is on npm, then takes the package
+  as a dev dependency, and as a peer only once it ships a feature that uses it.
 
 ## 6. Plan and gates
 
@@ -221,24 +216,25 @@ numbers next to each oracle (MOTION.md §7); nothing under `packages/motion`
 imports the upscaler. Finding that changes the spec: cut detection keys on
 depth consistency, not the histogram (§3.3).
 
-### Phase E: extraction (size: S–M)
-1. Scaffold the (already created, empty) repo like the downsampler (§3.4): one package,
-   subpath exports, optional peers, typecheck → test (GPU-free + SwiftShader GPU)
-   → build → pack check in CI, plus the CDP harness for real-GPU runs.
-2. Move `packages/motion` (src, lab, scripts, contract) **with history**
-   (`git filter-repo --subdirectory-filter packages/motion`, plus the history of
-   the files that lived elsewhere before Phase 1).
-3. Move MOTION.md, this plan and the motion part of `engine-contract.md`;
-   leave links in the upscaler.
-4. Remove the incubating copies from the upscaler. Its motion experiments
-   (warping error on upscaler output) run against the new repo as a dev dependency.
+### Phase E: extraction (in progress, 2026-11-14)
+1. ✅ Scaffolded like the downsampler (§3.4, §5): one package, subpath exports,
+   optional peer, CI with a SwiftShader conformance run.
+2. ✅ Moved `packages/motion`, MOTION.md and this plan **with history**: the three
+   upscaler commits that touched them, replayed with `format-patch`/`am` limited
+   to those paths (original authors and dates kept).
+3. ✅ Moved to three r187 and re-ran every experiment on a real GPU (MOTION.md §7):
+   Phase 1's numbers reproduce, except the two r187 fixed or changed.
+4. ⬜ First push and a green CI run.
+5. ⬜ In the upscaler: drop the lab, scripts and contract from `packages/motion`,
+   keep `src/` frozen for its bench probe until 0.x is on npm. The motion part
+   of its `engine-contract.md` moves into CONTRACT.md then.
 
-**Exit:** the new repo's CI is green and the lab reproduces Phase 1's numbers
-there; upscaler CI is green without `packages/motion`.
+**Exit:** this repo's CI is green and the lab reproduces Phase 1's numbers (met
+locally on Metal and SwiftShader); upscaler CI is green on the trimmed copy.
 
 ### ⛳ D1: is automatic `positionNode` previous feasible? (new repo, start of Phase 2)
 A time-boxed spike (about two days) on R6: clone a `positionNode` graph with
-uniforms and `positionLocal` substituted, on r186.1.
+uniforms and `positionLocal` substituted, on r187.
 - **Feasible:** build R6 as specified.
 - **Partial** (works for some graph shapes): R6 for those, R7 hook for the rest, documented.
 - **Infeasible:** R7 hook plus the R8 flag. Animated displacement becomes opt-in.
@@ -261,7 +257,8 @@ uniforms and `positionLocal` substituted, on r186.1.
 - The denoiser does the same.
 - Run the audit on Babylon's velocity with the deformers scene.
 - File upstream #17/#18 with the lab as the repro
-  ([UPSTREAM-CANDIDATES.md](UPSTREAM-CANDIDATES.md)).
+  ([UPSTREAM-CANDIDATES.md](https://github.com/pmndrs/upscaler/blob/main/docs/research/UPSTREAM-CANDIDATES.md)). r187
+  already fixed #18's projection half (MOTION.md §7).
 
 **Exit:** both consumers render correctly on the packed package; Babylon findings recorded.
 
@@ -310,6 +307,7 @@ ships from there.
 | 2026-11-14 | Package shape follows the downsampler: one package, subpath per engine, optional peers | Agreed |
 | 2026-11-14 | Name: repo `pmndrs/motion-vectors`, package `@pmndrs/motion-vectors`; repo created under `pmndrs`, private until 0.x | Done |
 | 2026-11-14 | Phase 1 done: lab self-contained under `packages/motion`, exact oracle, contract draft | Done |
+| 2026-11-14 | Extracted to pmndrs/motion-vectors with history; three r187 is the development baseline | Done (push pending) |
 | 2026-11-14 | Cut detection keys on depth consistency; the histogram is the depth-less fallback | Proposed (measured, MOTION.md §7) |
 | — | D1: `positionNode` previous feasibility | Pending (Phase 2) |
 | — | P: publish 0.x | Pending (review by 2026-12-15, proposed) |

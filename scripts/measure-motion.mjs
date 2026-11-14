@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Motion lab meter (EXPERIMENTAL): the package's acceptance harness
- * (docs/research/MOTION-VECTORS-PLAN.md §4). Drives lab/index.html over CDP;
+ * (docs/PLAN.md §4). Drives lab/index.html over CDP;
  * every number is exact GPU readback.
  *
  * Experiments (--experiments, comma-separated):
@@ -20,10 +20,15 @@
  * - probe: one --request (or an array), prints per-object errors.
  *
  * Usage:
- *   node packages/motion/scripts/measure-motion.mjs [--experiments …] [--label motion]
+ *   node scripts/measure-motion.mjs [--experiments …] [--label motion]
  *     [--width 1280] [--height 720] [--url http://127.0.0.1:5611] [--port 9411]
+ *     [--adapter swiftshader] [--check]
  *
- * Writes packages/motion/results/<label>/<experiment>.json + PNGs (gitignored).
+ * --check fails (exit 1) unless the conformance bars hold (CONTRACT.md):
+ * three's velocity, the oracle and motion from depth agree on rigid and camera
+ * motion, and the lab's controls read zero. CI runs it on SwiftShader.
+ *
+ * Writes results/<label>/<experiment>.json + PNGs (gitignored).
  */
 import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
@@ -37,7 +42,7 @@ import { DEFAULT_BENCH_URL, parsePort, removeTempDirectory, resolveServerUrl, sp
 
 const PACKAGE = resolve(import.meta.dirname, '..');
 const ALL = ['oracle', 'deformers', 'cases', 'ticks', 'jitter', 'water', 'track', 'cuts'];
-const USAGE = `Usage: node packages/motion/scripts/measure-motion.mjs [options]
+const USAGE = `Usage: node scripts/measure-motion.mjs [options]
   --experiments <list>   ${ALL.join(',')},probe (default: all but probe)
   --width <px> --height <px>   render size (default 1280x720)
   --label <name>         output folder (default motion)
@@ -45,8 +50,10 @@ const USAGE = `Usage: node packages/motion/scripts/measure-motion.mjs [options]
   --port <n>             Chrome DevTools port (default 9411)
   --request <json>       with probe: one lab request or an array
   --name <file>          with probe: screenshot name (default probe)
-Writes packages/motion/results/<label>/.`;
-const cli = parseCliOrExit(process.argv.slice(2), ['experiments', 'width', 'height', 'label', 'url', 'port', 'request', 'name'], USAGE);
+  --adapter swiftshader  software WebGPU (CI, no GPU)
+  --check                exit 1 unless the conformance bars hold
+Writes results/<label>/.`;
+const cli = parseCliOrExit(process.argv.slice(2), ['experiments', 'width', 'height', 'label', 'url', 'port', 'request', 'name', 'adapter', 'check'], USAGE);
 const experiments = (cli.experiments ?? ALL.join(',')).split(',').filter(Boolean);
 const width = Number(cli.width ?? 1280);
 const height = Number(cli.height ?? 720);
@@ -58,6 +65,22 @@ const outputDirectory = join(PACKAGE, 'results', cli.label ?? 'motion');
 const COMPARE = ['zero', 'three', 'camera'];
 /** Warp audit candidates, in the lab's order. */
 const AUDIT = ['zero', 'three', 'camera', 'oracle'];
+
+//* Conformance Bars
+/** Mean endpoint error a conforming source stays under where it is exact (CONTRACT.md). */
+const EXACT_PIXELS = 0.01;
+const failures = [];
+/**
+ * Records a bar for --check: `summary`'s candidate error must stay under EXACT_PIXELS.
+ * @param {string} label - What is checked
+ * @param {ReturnType<typeof compareSummary>} summary - An object's comparison
+ * @param {number} candidate - 1 three, 2 camera motion from depth
+ */
+function expectExact(label, summary, candidate) {
+    const error = summary?.candidates[candidate].error;
+    if (error === undefined || error === null || !(error <= EXACT_PIXELS))
+        failures.push(`${label}: ${COMPARE[candidate]} error ${error ?? 'n/a'} px (bar ${EXACT_PIXELS} px)`);
+}
 
 //* Summaries
 const fmt = (value, digits = 3, pad = 8) => (value === null || value === undefined || !Number.isFinite(value) ? '—' : value.toFixed(digits)).padStart(pad);
@@ -129,6 +152,11 @@ async function oracleCheck(run, screenshot) {
     printCompare('camera motion / static', summary.cameraStatic);
     printCompare('camera motion / props', summary.cameraProps);
     printCompare('props moving / props', summary.objectProps);
+    // Where three is exact, three and the oracle must agree: that validates the oracle.
+    expectExact('oracle: camera motion, static', summary.cameraStatic, 1);
+    expectExact('oracle: camera motion, static', summary.cameraStatic, 2);
+    expectExact('oracle: camera motion, props', summary.cameraProps, 1);
+    expectExact('oracle: moving props', summary.objectProps, 1);
     await run({ scene: 'track', end: 60, view: 'audit-motion', heatCandidate: 3 });
     await screenshot('oracle-track-f60');
     return summary;
@@ -149,6 +177,7 @@ async function deformers(run, screenshot) {
         .sort((a, b) => b.error - a.error)
         .slice(0, 3);
     console.log(`  reentry: worst three frames ${reentry.map((row) => `${row.frame} (${fmt(row.error, 2, 0)} px)`).join(', ')}`);
+    expectExact('deformers: rigid box', summary.rigid, 1);
     summary.audit = auditSummary(result.frames);
     printAudit('whole frame', summary.audit);
     for (const [view, candidate] of [['output', 1], ['audit-motion', 1], ['audit-motion', 3]]) {
@@ -167,6 +196,7 @@ async function cases(run) {
             const key = `${name} ${segment.name}`;
             summary[key] = compareSummary(segment.frames, name);
             printCompare(key, summary[key]);
+            if (name === 'rigid-move') expectExact(`cases: ${key}`, summary[key], 1);
         }
     return summary;
 }
@@ -193,6 +223,7 @@ async function jitter(run) {
         summary[velocityProjection] = compareSummary(after, 'static');
         printCompare(`jitter on, ${velocityProjection}`, summary[velocityProjection]);
     }
+    expectExact('jitter: stable matrix, still scene', summary.stable, 1);
     return summary;
 }
 
@@ -303,6 +334,8 @@ async function main() {
                 `--user-data-dir=${profile}`,
                 `--window-size=${width + 40},${height + 40}`,
                 '--force-device-scale-factor=1',
+                ...(cli.adapter === 'swiftshader' ? ['--use-webgpu-adapter=swiftshader', '--enable-unsafe-swiftshader', '--enable-features=Vulkan'] : []),
+                ...(process.env.CI ? ['--no-sandbox'] : []),
                 'about:blank',
             ],
             { stdio: ['ignore', 'ignore', 'ignore'] },
@@ -348,6 +381,12 @@ async function main() {
         await writeFile(join(outputDirectory, 'browser-log.txt'), `${records.join('\n')}\n`);
         if (records.some((line) => /error|exception|validation|invalid/i.test(line))) console.warn(`\nbrowser log:\n${records.join('\n')}`);
         console.log(`\nartifacts: ${outputDirectory}`);
+        if (cli.check) {
+            if (failures.length) {
+                console.error(`\nconformance: ${failures.length} bar(s) failed\n  ${failures.join('\n  ')}`);
+                process.exitCode = 1;
+            } else console.log('\nconformance: every bar holds');
+        }
     } finally {
         client?.close();
         await stopChild(chrome);

@@ -3,9 +3,8 @@
 **Status: draft, 2026-11-14.** This is what every producer (an engine's velocity
 output, our three node, motion from depth) and every consumer (the upscaler, the
 denoiser, GI) agrees a motion vector means. It is checked by the motion lab's
-oracle (`lab/`, `scripts/measure-motion.mjs`). The open items at the end must be
-settled before the 0.x publish (gate P in
-[MOTION-VECTORS-PLAN.md](../../docs/research/MOTION-VECTORS-PLAN.md)).
+oracle (`lab/`, `scripts/measure-motion.mjs --check`). The open items at the end
+must be settled before the 0.x publish (gate P in [docs/PLAN.md](docs/PLAN.md)).
 
 ## The value
 
@@ -37,7 +36,7 @@ itself, but none of its real motion either) and flags it.
 |---|---|---|---|
 | three (WebGPU) | NDC current − previous, y up | `(0.5, −0.5)` | three's own `velocity` breaks the contract on deformation, on frame history and on jitter after a runtime switch; see "Conformance". |
 | raw WebGPU (motion from depth) | the contract | `(0.5, −0.5)` | Exact for static geometry; zero for object motion (to be flagged in `.z`). |
-| Babylon (WebGPU) | linear `0.5 · (previous − current)`, render targets Y-flipped | `(−1, −1)` | From the upscaler's `docs/engine-contract.md` and `docs/babylon.md`; moves here at extraction. The audit has not been run on Babylon yet. |
+| Babylon (WebGPU) | linear `0.5 · (previous − current)`, render targets Y-flipped | `(−1, −1)` | From the upscaler's [engine-contract.md](https://github.com/pmndrs/upscaler/blob/main/docs/engine-contract.md) and [babylon.md](https://github.com/pmndrs/upscaler/blob/main/docs/babylon.md). The audit has not been run on Babylon yet. |
 
 ## Conformance
 
@@ -57,13 +56,14 @@ A conforming producer, at 1280×720:
 - **Jitter:** zero on a still scene with jitter on, however the jitter was switched on.
 - **Frame history:** unchanged error with several renders per animation-loop tick.
 
-What three r186.1's `velocity` reads against these (lab, 2026-11-14): 3.2 px on a
-*static* displaced plane, 51.9 px while a `positionNode` moves an object and
-64+ px (the cap) once it holds, 11.6 px on a morph target held at weight 1,
-11.8 px on an animated water swell, 0.36 px of jitter on a still scene after a
-runtime switch, and 10.6 / 23.9 px with 2 / 4 renders per tick. Rigid and
+What three's `velocity` reads against these (lab, 2026-11-14, r187; r186.1 where
+it differs): 3.2 px on a *static* displaced plane, 51.9 px while a `positionNode`
+moves an object and 64+ px (the cap) once it holds, 11.6 px on a morph target
+held at weight 1, 11.8 px on an animated water swell, and 8.8 / 14.4 px with 2 / 4
+renders per tick (r186.1: 10.6 / 23.9). A runtime jitter switch reads 0.000 px
+on r187 (r186.1: 0.36 px). Rigid and
 camera motion are exact. Skinning, instancing and batching use three's own
-previous data and are not measured yet. Findings: [MOTION.md](../../docs/research/MOTION.md) §7.
+previous data and are not measured yet. Findings: [docs/MOTION.md](docs/MOTION.md) §7.
 
 ## Open before 0.x
 

@@ -1,13 +1,59 @@
 {
-    "name": "@pmndrs/upscaler-motion",
+    "name": "@pmndrs/motion-vectors",
     "version": "0.0.0",
     "private": true,
-    "description": "EXPERIMENTAL motion vectors for any WebGPU pipeline: camera motion from depth, motion-vector audit, cut detection, and the GPU lab. Incubating here; moves to pmndrs/motion-vectors (@pmndrs/motion-vectors) after Phase 1 (docs/research/MOTION-VECTORS-PLAN.md).",
-    "license": "MIT",
+    "description": "Motion vectors for any WebGPU pipeline: a written contract, camera motion from depth, an exact oracle-based audit of an engine's velocity, and cut detection. Engine agnostic, with a three.js adapter.",
     "type": "module",
+    "license": "MIT",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/pmndrs/motion-vectors.git"
+    },
+    "homepage": "https://github.com/pmndrs/motion-vectors#readme",
+    "bugs": {
+        "url": "https://github.com/pmndrs/motion-vectors/issues"
+    },
+    "keywords": ["webgpu", "wgsl", "motion-vectors", "velocity", "reprojection", "taa", "upscaling", "three", "threejs"],
     "sideEffects": false,
+    "files": ["dist", "!dist/**/*.map", "CONTRACT.md"],
+    "main": "./dist/index.js",
+    "module": "./dist/index.js",
+    "types": "./dist/index.d.ts",
     "exports": {
-        ".": "./src/index.ts",
-        "./*": "./src/*.ts"
+        ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+        "./webgpu": { "types": "./dist/webgpu/index.d.ts", "default": "./dist/webgpu/index.js" },
+        "./three": { "types": "./dist/three/index.d.ts", "default": "./dist/three/index.js" },
+        "./package.json": "./package.json"
+    },
+    "typesVersions": {
+        "*": {
+            "webgpu": ["./dist/webgpu/index.d.ts"],
+            "three": ["./dist/three/index.d.ts"]
+        }
+    },
+    "scripts": {
+        "build": "tsc -p tsconfig.build.json",
+        "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+        "prepack": "npm run clean && npm run build",
+        "typecheck": "tsc -p tsconfig.json --noEmit",
+        "test": "vitest run",
+        "lab": "vite --config lab/vite.config.ts",
+        "measure": "node scripts/measure-motion.mjs",
+        "check:gpu": "node scripts/measure-motion.mjs --experiments oracle,cases,jitter --check",
+        "verify:pack": "node scripts/verify-pack.mjs"
+    },
+    "peerDependencies": {
+        "three": ">=0.184.0"
+    },
+    "peerDependenciesMeta": {
+        "three": { "optional": true }
+    },
+    "devDependencies": {
+        "@types/three": "0.187.0",
+        "@webgpu/types": "^0.1.64",
+        "three": "0.187.0",
+        "typescript": "^5.7.0",
+        "vite": "^6.1.0",
+        "vitest": "^3.0.0"
     }
 }

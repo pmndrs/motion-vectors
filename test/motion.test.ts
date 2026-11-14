@@ -1,11 +1,11 @@
 import { Matrix4, PerspectiveCamera, Vector3 } from 'three';
 import { describe, expect, it } from 'vitest';
 
-import { decodeCompare, decodeStats, HISTOGRAM_SLOTS, RESIDUAL_SLOTS } from './MotionAnalyzer';
-import { earthMovers, jensenShannon } from './math/histogram';
-import { cameraMotionAt } from './math/reprojection';
-import { CAMERA_MOTION_SHADER } from './shaders/cameraMotion';
-import { HISTOGRAM_BINS, LUMA_HISTOGRAM_SHADER } from './shaders/lumaHistogram';
+import { decodeCompare, decodeStats, HISTOGRAM_SLOTS, RESIDUAL_SLOTS } from '../src/webgpu/MotionAnalyzer.js';
+import { earthMovers, jensenShannon } from '../src/math/histogram.js';
+import { cameraMotionAt } from '../src/math/reprojection.js';
+import { CAMERA_MOTION_SHADER } from '../src/webgpu/shaders/cameraMotion.js';
+import { HISTOGRAM_BINS, LUMA_HISTOGRAM_SHADER } from '../src/webgpu/shaders/lumaHistogram.js';
 import {
     COMPARE_CANDIDATE_WORDS,
     COMPARE_CAP_PIXELS,
@@ -15,8 +15,8 @@ import {
     COMPARE_OBJECTS,
     COMPARE_WORDS,
     MOTION_COMPARE_SHADER,
-} from './shaders/motionCompare';
-import { CANDIDATE_FIELDS, MAX_CANDIDATES, MOTION_RESIDUAL_SHADER, STATS_STRIDE } from './shaders/motionResidual';
+} from '../src/webgpu/shaders/motionCompare.js';
+import { CANDIDATE_FIELDS, MAX_CANDIDATES, MOTION_RESIDUAL_SHADER, STATS_STRIDE } from '../src/webgpu/shaders/motionResidual.js';
 
 //* Camera Helpers
 function camera(position: [number, number, number], target: [number, number, number] = [0, 0, 0]) {

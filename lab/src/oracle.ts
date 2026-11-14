@@ -1,7 +1,7 @@
 import * as THREE from 'three/webgpu';
 import { float, modelWorldMatrix, mrt, positionLocal, select, uniform, vec4, vertexStage } from 'three/tsl';
 
-import { ORACLE_NO_PREVIOUS, ORACLE_VALID } from '../../src/index';
+import { ORACLE_NO_PREVIOUS, ORACLE_VALID } from '../../src/webgpu/index.js';
 
 type Vec3Node = THREE.Node<'vec3'>;
 const matrixUniform = () => uniform(new THREE.Matrix4());

@@ -1,26 +1,25 @@
 import * as THREE from 'three/webgpu';
 import { mrt, output, texture, velocity } from 'three/tsl';
 
+import { earthMovers, jensenShannon } from '../../src/index.js';
+import { createThreeTextureAllocator, getGPUTexture } from '../../src/three/index.js';
 import {
-    earthMovers,
-    jensenShannon,
     MotionAnalyzer,
     RESIDUAL_DEBUG_CLASSIFY,
     RESIDUAL_DEBUG_HEAT,
     RESIDUAL_DEBUG_MOTION,
     type CompareObjectStats,
     type ResidualStats,
-} from '../../src/index';
+} from '../../src/webgpu/index.js';
 import { Oracle, ORACLE_OUTPUT } from './oracle';
 import { createCases } from './scenes/cases';
 import { FPS, type LabScene, type SceneFactory } from './scenes/common';
 import { createCourtyard } from './scenes/courtyard';
 import { createDeformers } from './scenes/deformers';
 import { createWater } from './scenes/water';
-import { createThreeTextureAllocator, getGPUTexture } from './three';
 
 /**
- * Motion lab (EXPERIMENTAL), driven by `packages/motion/scripts/measure-motion.mjs`
+ * Motion lab (EXPERIMENTAL), driven by `scripts/measure-motion.mjs`
  * over CDP. Renders one of the lab's own scenes and measures, per frame, with
  * exact GPU readback:
  *

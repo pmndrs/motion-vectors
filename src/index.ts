@@ -1,23 +1,16 @@
 /**
- * EXPERIMENTAL motion analysis (motion lab). Engine-free; incubating in the
- * upscaler repo until it moves to pmndrs/motion-vectors. Contract draft:
- * packages/motion/CONTRACT.md; findings: docs/research/MOTION.md.
+ * `@pmndrs/motion-vectors`: the backend-neutral core. The motion contract's
+ * constants and CPU reference math. GPU products live in `/webgpu`, the
+ * three.js glue in `/three`. Contract: CONTRACT.md.
  */
-export { MotionAnalyzer, decodeCompare, decodeStats, RESIDUAL_SLOTS, HISTOGRAM_SLOTS } from './MotionAnalyzer';
-export type {
-    CameraMatrices,
-    CandidateStats,
-    CompareCandidateStats,
-    CompareObjectStats,
-    MotionFrameStats,
-    ResidualRequest,
-    ResidualStats,
-} from './MotionAnalyzer';
-export { COMPARE_OBJECTS, ORACLE_NO_PREVIOUS, ORACLE_VALID } from './shaders/motionCompare';
-export { createDeviceTextureAllocator } from './textures';
-export type { MotionTexture, MotionTextureDescriptor, MotionTextureFormat, TextureAllocator } from './textures';
-export { MOVING_PIXELS, RESIDUAL_DEBUG_CLASSIFY, RESIDUAL_DEBUG_HEAT, RESIDUAL_DEBUG_MOTION } from './shaders/motionResidual';
-export { HISTOGRAM_BINS } from './shaders/lumaHistogram';
-export { jensenShannon, earthMovers } from './math/histogram';
-export { cameraMotionAt } from './math/reprojection';
-export type { CameraMotionSample } from './math/reprojection';
+
+/**
+ * Converts a contract motion vector (NDC delta, current − previous, y up) to a
+ * UV delta for engines whose UV origin is top-left (three, raw WebGPU):
+ * `previousUV = uv − motion · MOTION_SCALE`.
+ */
+export const MOTION_SCALE: readonly [number, number] = [0.5, -0.5];
+
+export { earthMovers, jensenShannon } from './math/histogram.js';
+export { cameraMotionAt } from './math/reprojection.js';
+export type { CameraMotionSample } from './math/reprojection.js';

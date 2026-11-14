@@ -1,7 +1,7 @@
-import { createDeviceTextureAllocator, type MotionTexture, type TextureAllocator } from './textures';
+import { createDeviceTextureAllocator, type MotionTexture, type TextureAllocator } from './textures.js';
 
-import { CAMERA_MOTION_SHADER, MOTION_CONSTANTS_BYTES } from './shaders/cameraMotion';
-import { HISTOGRAM_BINS, LUMA_HISTOGRAM_SHADER } from './shaders/lumaHistogram';
+import { CAMERA_MOTION_SHADER, MOTION_CONSTANTS_BYTES } from './shaders/cameraMotion.js';
+import { HISTOGRAM_BINS, LUMA_HISTOGRAM_SHADER } from './shaders/lumaHistogram.js';
 import {
     COMPARE_CANDIDATE_WORDS,
     COMPARE_CANDIDATES,
@@ -12,7 +12,7 @@ import {
     COMPARE_OBJECTS,
     COMPARE_WORDS,
     MOTION_COMPARE_SHADER,
-} from './shaders/motionCompare';
+} from './shaders/motionCompare.js';
 import {
     CANDIDATE_FIELDS,
     MAX_CANDIDATES,
@@ -23,7 +23,7 @@ import {
     RESIDUAL_FLAG_DEBUG,
     RESIDUAL_FLAG_DEPTH_TEST,
     STATS_STRIDE,
-} from './shaders/motionResidual';
+} from './shaders/motionResidual.js';
 
 /** Residual statistics slots per frame (one per `encodeResidual` call). */
 export const RESIDUAL_SLOTS = 8;
