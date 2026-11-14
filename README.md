@@ -45,6 +45,17 @@ renderer.setAnimationLoop(() => {
   outside a `Fn`, textures or storage buffers that change per frame
   (docs/MOTION.md §8).
 
+## Examples
+
+```bash
+npm run examples   # http://localhost:5612
+```
+
+- **three-compare**: the same scene with three's `velocity` (left) and
+  `MotionVectors` (right), as motion vectors, motion blur or colour. Pause it:
+  the right half goes flat grey (zero motion), the left keeps reporting motion
+  on every deformed object.
+
 ## The lab
 
 `lab/` renders scenes whose every object also writes an **oracle**: its exact

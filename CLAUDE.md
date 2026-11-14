@@ -12,6 +12,7 @@ npm run typecheck   # src, test, lab
 npm test            # vitest, GPU-free
 npm run build       # tsc → dist/
 npm run verify:pack # the tarball a consumer installs
+npm run examples    # example gallery, Vite, :5612 (imports the package by name → src/)
 npm run lab         # Vite, :5611
 npm run measure     # every lab experiment on the real GPU (headless Chrome + CDP)
 npm run check:gpu   # conformance bars; CI runs it with --adapter swiftshader --width 640 --height 360

@@ -3,13 +3,19 @@
         "target": "ES2022",
         "module": "ES2022",
         "moduleResolution": "Bundler",
-        "lib": ["ES2022", "DOM"],
+        "lib": ["ES2022", "DOM", "DOM.Iterable"],
         "types": ["@webgpu/types", "vite/client"],
         "strict": true,
         "noUnusedLocals": true,
         "noUnusedParameters": true,
         "skipLibCheck": true,
+        "paths": {
+            "@pmndrs/motion-vectors": ["./src/index.ts"],
+            "@pmndrs/motion-vectors/webgpu": ["./src/webgpu/index.ts"],
+            "@pmndrs/motion-vectors/three": ["./src/three/index.ts"]
+        },
         "noEmit": true
     },
-    "include": ["src", "test", "lab/src"]
+    "include": ["src", "test", "lab/src", "examples/**/*.ts"],
+    "exclude": ["examples/vite.config.ts"]
 }

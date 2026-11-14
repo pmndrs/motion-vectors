@@ -38,6 +38,8 @@
         "typecheck": "tsc -p tsconfig.json --noEmit",
         "test": "vitest run",
         "lab": "vite --config lab/vite.config.ts",
+        "examples": "vite --config examples/vite.config.ts",
+        "build:examples": "vite build --config examples/vite.config.ts --outDir ../examples-dist --emptyOutDir",
         "measure": "node scripts/measure-motion.mjs",
         "check:gpu": "node scripts/measure-motion.mjs --experiments oracle,cases,jitter,node --check",
         "verify:pack": "node scripts/verify-pack.mjs"
