@@ -2,7 +2,7 @@ import * as THREE from 'three/webgpu';
 import { mrt, output, texture, velocity } from 'three/tsl';
 
 import { earthMovers, jensenShannon } from '../../src/index.js';
-import { createThreeTextureAllocator, getGPUTexture } from '../../src/three/index.js';
+import { createThreeTextureAllocator, getGPUTexture, MotionVectors } from '../../src/three/index.js';
 import {
     MotionAnalyzer,
     RESIDUAL_DEBUG_CLASSIFY,
@@ -46,6 +46,7 @@ const SCENES: Record<string, SceneFactory> = {
 };
 
 type LabView = 'output' | 'audit' | 'audit-heat' | 'audit-motion';
+type MotionSource = 'three' | 'node';
 
 interface LabRequest {
     scene: string;
@@ -70,6 +71,19 @@ interface LabRequest {
     /** Renders per animation-loop tick (three advances its camera history once per tick). Default 1. */
     rendersPerTick?: number;
     view?: LabView;
+    /**
+     * What fills the `velocity` MRT slot (candidate 1): three's `velocity`
+     * (default) or this package's node. Each source has its own scene
+     * instances, so their shader builds never mix.
+     */
+    motion?: MotionSource;
+    /**
+     * Drive the node's frames with `beginFrame()` (default). `false` leaves it
+     * on three's frame counter, as an app that never calls it.
+     */
+    driven?: boolean;
+    /** Record the GPU time of each frame's scene render (needs `?timing=1`). */
+    timing?: boolean;
     /** Candidate shown by the heat / motion views (0 zero, 1 three, 2 camera, 3 oracle). */
     heatCandidate?: number;
 }
@@ -85,10 +99,15 @@ interface FrameRecord {
     audit: ResidualStats | null;
     cutJS: number | null;
     cutEMD: number | null;
+    /** GPU milliseconds of the scene render (shadow + MRT passes), with `timing`. */
+    renderMs?: number;
 }
 
 //* Renderer
-const renderer = new THREE.WebGPURenderer({ antialias: false });
+// `?timing=1` turns on three's GPU timestamps (the `cost` experiment); off by
+// default, since SwiftShader (CI) lacks timestamp queries.
+const TIMING = new URLSearchParams(location.search).get('timing') === '1';
+const renderer = new THREE.WebGPURenderer({ antialias: false, trackTimestamp: TIMING });
 renderer.shadowMap.enabled = true;
 renderer.setPixelRatio(1);
 renderer.setSize(1280, 720);
@@ -119,6 +138,9 @@ await analyzer.init();
 // One stable matrix for the session (see `velocityProjection`).
 const velocityProjection = new THREE.Matrix4();
 velocity.setProjectionMatrix(velocityProjection);
+// This package's node, driven per lab frame (beginFrame) with the same matrix.
+const motionVectors = MotionVectors.for(renderer);
+motionVectors.projectionMatrix = velocityProjection;
 
 const quad = new THREE.QuadMesh(new THREE.MeshBasicNodeMaterial({ depthTest: false, depthWrite: false }));
 const quadMaterial = quad.material as THREE.MeshBasicNodeMaterial;
@@ -134,14 +156,16 @@ const loaded = new Map<string, LoadedScene>();
  * The cached instance of a scene, or a new one. `throwaway` instances are not
  * cached: their materials build under the trap's projection and stay that way.
  */
-function load(name: string, fresh: boolean, throwaway: boolean): LoadedScene {
+function load(name: string, source: MotionSource, fresh: boolean, throwaway: boolean): LoadedScene {
     const factory = SCENES[name];
     if (!factory) throw new Error(`Unknown lab scene "${name}" (${Object.keys(SCENES).join(', ')}).`);
-    let entry = throwaway ? undefined : loaded.get(name);
+    const key = `${name}:${source}`;
+    let entry = throwaway ? undefined : loaded.get(key);
     if (!entry || fresh) {
         const oracle = new Oracle();
-        entry = { lab: factory(oracle), oracle, mrt: mrt({ output, velocity, [ORACLE_OUTPUT]: oracle.staticNode }) };
-        if (!throwaway) loaded.set(name, entry);
+        const engine = source === 'node' ? motionVectors.velocity : velocity;
+        entry = { lab: factory(oracle), oracle, mrt: mrt({ output, velocity: engine, [ORACLE_OUTPUT]: oracle.staticNode }) };
+        if (!throwaway) loaded.set(key, entry);
     }
     return entry;
 }
@@ -200,7 +224,11 @@ async function run(request: LabRequest): Promise<{ frames: FrameRecord[]; object
     const width = request.width ?? 1280;
     const height = request.height ?? 720;
     const trap = request.velocityProjection === 'trap';
-    const { lab, oracle, mrt: sceneMrt } = load(request.scene, request.fresh === true, trap);
+    const source = request.motion ?? 'three';
+    // Materials pick their position stage when they build: three's own for the
+    // 'three' source, so its baseline stays three's (MotionVectors.enabled).
+    motionVectors.enabled = source === 'node';
+    const { lab, oracle, mrt: sceneMrt } = load(request.scene, source, request.fresh === true, trap);
     const end = request.end ?? lab.end;
     const start = request.start ?? 1;
     const view = request.view ?? 'output';
@@ -210,6 +238,10 @@ async function run(request: LabRequest): Promise<{ frames: FrameRecord[]; object
     lab.select?.(request.objects);
     analyzer.reset();
     oracle.reset();
+    motionVectors.reset();
+    const driven = request.driven !== false;
+    // Lab-only: put the node back on three's frame counter for this run.
+    (motionVectors as unknown as { _driven: boolean })._driven = driven;
     if (trap) velocity.setProjectionMatrix(null);
 
     const frames: FrameRecord[] = [];
@@ -230,6 +262,7 @@ async function run(request: LabRequest): Promise<{ frames: FrameRecord[]; object
             velocityProjection.copy(unjittered);
             const view4 = camera.matrixWorldInverse;
             oracle.beginFrame(new THREE.Matrix4().multiplyMatrices(unjittered, view4), frame / FPS);
+            if (driven) motionVectors.beginFrame();
             if (frame % rendersPerTick === 0) {
                 nodeFrame!.update();
                 nodeFrame!.time = (frame + 1) / FPS;
@@ -242,6 +275,7 @@ async function run(request: LabRequest): Promise<{ frames: FrameRecord[]; object
             renderer.render(lab.scene, camera);
             renderer.setRenderTarget(null);
             renderer.setMRT(null);
+            const renderMs = request.timing && TIMING ? await renderer.resolveTimestampsAsync(THREE.TimestampQuery.RENDER) : undefined;
 
             const [color, engine, oracleTexture] = target!.textures;
             const early = device.createCommandEncoder({ label: 'motion-lab-early' });
@@ -293,7 +327,7 @@ async function run(request: LabRequest): Promise<{ frames: FrameRecord[]; object
             const compare: Record<string, CompareObjectStats> = {};
             for (const [id, objectStats] of (stats.compare ?? []).entries())
                 if (objectStats.valid + objectStats.noPrevious > 0) compare[lab.objects[id] ?? `id-${id}`] = objectStats;
-            frames.push({ frame, segment: truth.segment, cut: truth.cut, jittered, compare, audit: stats.residuals[0], cutJS, cutEMD });
+            frames.push({ frame, segment: truth.segment, cut: truth.cut, jittered, compare, audit: stats.residuals[0], cutJS, cutEMD, renderMs });
         }
     } finally {
         if (trap) velocity.setProjectionMatrix(velocityProjection);

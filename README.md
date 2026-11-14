@@ -17,8 +17,33 @@ must mean and measures any source against it.
 - **`@pmndrs/motion-vectors/webgpu`**: engine-free GPU passes on a bare
   `GPUDevice`: camera motion from depth, a warp-residual audit, an exact
   oracle comparison, luma histograms.
-- **`@pmndrs/motion-vectors/three`**: three.js `WebGPURenderer` glue. A
-  corrected velocity node is next ([docs/PLAN.md](docs/PLAN.md) Phase 2).
+- **`@pmndrs/motion-vectors/three`**: a drop-in `velocity` for three.js
+  `WebGPURenderer` that is exact where three's is not: `positionNode`
+  deformation, morph targets, `displacementMap`, several renders per frame
+  ([docs/MOTION.md](docs/MOTION.md) §8).
+
+## three
+
+```ts
+import { mrt, output } from 'three/tsl';
+import { MotionVectors } from '@pmndrs/motion-vectors/three';
+
+const motion = MotionVectors.for(renderer); // one per renderer, shared page-wide
+renderer.setMRT(mrt({ output, velocity: motion.velocity })); // the output must be named `velocity`
+
+renderer.setAnimationLoop(() => {
+    motion.beginFrame(); // optional with one render per loop tick; required with more
+    renderer.render(scene, camera);
+});
+```
+
+- **Jitter:** set `motion.projectionMatrix` to the unjittered projection (any
+  `Matrix4`, read every frame); without it the camera's own projection is used.
+- **Cuts:** `motion.reset()` makes the next frame report zero motion.
+- **`positionNode`** graphs are re-evaluated with last frame's uniforms and
+  previous position automatically. Not covered yet: `toVar()` variables made
+  outside a `Fn`, textures or storage buffers that change per frame
+  (docs/MOTION.md §8).
 
 ## The lab
 

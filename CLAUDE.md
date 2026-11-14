@@ -43,3 +43,14 @@ npm run check:gpu   # conformance bars; CI runs it with --adapter swiftshader --
    (`motionCompare.ts`); larger frames need a coarser fixed point.
 6. `renderer.backend.get(texture).texture` is private three API
    (`src/three/textures.ts`): re-verify it on every three bump.
+7. **`MotionVectors` patches two three prototypes, once per page**
+   (`src/three/MotionVectors.ts`): `NodeMaterial.setupPosition` is replaced by
+   a copy of r187's sequence that also carries `positionPrevious`, and
+   `Node.prototype.build` gets a scoped substitution hook used only while a
+   previous `positionNode` builds. On a three bump, diff three's
+   `setupPosition` against the copy first.
+8. **three's `frameId` isn't consecutive**: r187's `compileAsync` bumps it too.
+   History keys on the order frames render (`frameOf`), never on raw ids.
+9. **Headless Linux Chrome can't present a WebGPU canvas on SwiftShader**
+   (no swapchain shared image; the instance is lost at the first present). CI
+   runs the lab with `?present=0`; every check reads GPU buffers, not pixels.
