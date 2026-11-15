@@ -9,6 +9,7 @@ export default defineConfig({
     resolve: {
         alias: [
             { find: /^@pmndrs\/motion-vectors\/three$/, replacement: resolve(__dirname, '../src/three/index.ts') },
+            { find: /^@pmndrs\/motion-vectors\/pixi$/, replacement: resolve(__dirname, '../src/pixi/index.ts') },
             { find: /^@pmndrs\/motion-vectors\/webgpu$/, replacement: resolve(__dirname, '../src/webgpu/index.ts') },
             { find: /^@pmndrs\/motion-vectors$/, replacement: resolve(__dirname, '../src/index.ts') },
         ],
@@ -20,6 +21,7 @@ export default defineConfig({
             input: {
                 index: resolve(__dirname, 'index.html'),
                 'three-compare': resolve(__dirname, 'three-compare/index.html'),
+                'pixi-compare': resolve(__dirname, 'pixi-compare/index.html'),
             },
         },
     },

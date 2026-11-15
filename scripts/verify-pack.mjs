@@ -3,7 +3,9 @@
  * Packs the package and checks the tarball a consumer would install: every
  * `exports` target exists with its types, nothing outside `dist/` and the
  * contract ships, no import names another package of ours or a relative path
- * that escapes `dist/`, and the engine-free entries import in plain Node.
+ * that escapes `dist/`, each engine is imported only from its own subpath
+ * (`three` from `/three`, `@pixi/3d` and `pixi.js` from `/pixi`), and the
+ * engine-free entries import in plain Node.
  * Runs nothing on the GPU.
  */
 import { execFileSync } from 'node:child_process';
@@ -35,7 +37,10 @@ try {
             if (/^@pmndrs\//.test(specifier)) problems.push(`${relative(root, file)} imports ${specifier}`);
             if (specifier.startsWith('.') && !resolve(file, '..', specifier).startsWith(join(root, 'dist'))) problems.push(`${relative(root, file)} escapes dist: ${specifier}`);
             if (specifier.startsWith('.') && file.endsWith('.js') && !specifier.endsWith('.js')) problems.push(`${relative(root, file)}: extensionless ${specifier}`);
-            if (!specifier.startsWith('.') && !/^three(\/|$)/.test(specifier)) problems.push(`${relative(root, file)} imports undeclared ${specifier}`);
+            // Each engine only from its own subpath, so one engine never drags in another.
+            const where = relative(join(root, 'dist'), file).split(/[\\/]/)[0];
+            const allowed = where === 'three' ? /^three(\/|$)/ : where === 'pixi' ? /^(@pixi\/3d|pixi\.js)(\/|$)/ : null;
+            if (!specifier.startsWith('.') && !allowed?.test(specifier)) problems.push(`${relative(root, file)} imports ${specifier} outside its engine's subpath`);
         }
     }
 

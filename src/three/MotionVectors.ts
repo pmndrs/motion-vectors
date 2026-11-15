@@ -22,7 +22,7 @@ import {
     vertexIndex,
 } from 'three/tsl';
 
-import { FrameHistory } from './history.js';
+import { FrameHistory } from '../shared/history.js';
 
 /**
  * three internals this module touches, typed narrowly. All of them are

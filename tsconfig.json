@@ -12,7 +12,8 @@
         "paths": {
             "@pmndrs/motion-vectors": ["./src/index.ts"],
             "@pmndrs/motion-vectors/webgpu": ["./src/webgpu/index.ts"],
-            "@pmndrs/motion-vectors/three": ["./src/three/index.ts"]
+            "@pmndrs/motion-vectors/three": ["./src/three/index.ts"],
+            "@pmndrs/motion-vectors/pixi": ["./src/pixi/index.ts"]
         },
         "noEmit": true
     },

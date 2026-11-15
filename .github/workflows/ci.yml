@@ -58,6 +58,10 @@ jobs:
           "$path" --version
       - name: Lab conformance check
         run: node scripts/measure-motion.mjs --check --experiments ${{ matrix.experiments }} --adapter swiftshader --width 640 --height 360 --label ci
+      # The pixi-3d adapter against analytic motion (fast; rides on the shorter shard).
+      - name: pixi-3d check
+        if: matrix.experiments != 'oracle'
+        run: node scripts/check-pixi.mjs --adapter swiftshader --width 640 --height 360
       - uses: actions/upload-artifact@v4
         if: always()
         with:
