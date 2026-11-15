@@ -12,7 +12,8 @@
  * Output `motion` (rgba16float): xy = NDC delta, current − previous (three's
  * `velocity` convention, so it can be fed to the upscaler unchanged);
  * z = the point's linear depth in the previous camera (−1 when the point was
- * behind it); w = linear depth now. `linearDepth` (r32float) keeps this
+ * behind it); w = linear depth now, or 0 where the depth is the clear value
+ * (`params.x`: background, no surface). `linearDepth` (r32float) keeps this
  * frame's linear depth for the next frame's occlusion test.
  */
 export const CAMERA_MOTION_SHADER = /* wgsl */ `
@@ -48,7 +49,8 @@ fn main(@builtin(global_invocation_id) gid : vec3u) {
     // A point behind the previous camera has no previous screen position.
     let behind = prev.w <= 1e-6;
     let velocity = select(cur.xy / cur.w - prev.xy / prev.w, vec2f(0.0), behind);
-    textureStore(motionOut, pixel, vec4f(velocity, select(prevLinearDepth, -1.0, behind), linearDepth));
+    let background = d == M.params.x;
+    textureStore(motionOut, pixel, vec4f(velocity, select(prevLinearDepth, -1.0, behind), select(linearDepth, 0.0, background)));
     textureStore(linearDepthOut, pixel, vec4f(linearDepth, 0.0, 0.0, 0.0));
 }
 `;

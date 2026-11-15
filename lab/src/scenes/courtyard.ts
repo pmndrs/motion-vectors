@@ -45,6 +45,12 @@ const TRACK = timeline([
  * Cut timeline: two hard cuts, a cut between similar shots, and the events a
  * cut detector must *not* fire on (fade, one-frame flash, fast pan).
  * A segment named `cut-…` starts with its cut frame.
+ *
+ * From frame 300 (appended, so the first 300 frames are unchanged), the cases
+ * that stress each detector: a whip pan (content entering the frame), a large
+ * occluder sweeping past (disocclusion), a lighting step down and up, cuts
+ * onto and between sky-heavy shots (far depth matches far depth), and a cut
+ * that also changes the palette (another location).
  */
 const CUTS = timeline([
     ['still', 30],
@@ -56,7 +62,21 @@ const CUTS = timeline([
     ['pan-fast', 30],
     ['hold-2', 30],
     ['cut-back', 30],
+    ['whip-pan', 10],
+    ['hold-3', 20],
+    ['cut-back-2', 20],
+    ['sweep', 20],
+    ['hold-4', 20],
+    ['lights-off', 30],
+    ['lights-on', 30],
+    ['cut-sky', 30],
+    ['cut-sky-2', 30],
+    ['cut-palette', 30],
+    ['hold-5', 30],
 ]);
+
+/** Degrees per frame of the whip pan (540°/s at 60 fps). */
+const WHIP_STEP = 9;
 
 /**
  * The courtyard: static floor and back wall (object 0) and props (object 1:
@@ -109,6 +129,15 @@ export function createCourtyard(mode: 'track' | 'cuts'): SceneFactory {
         }
         scene.add(props);
 
+        // The sweep's occluder: a near panel that crosses the frame in 20 frames.
+        const panel = new THREE.Mesh(new THREE.BoxGeometry(2.5, 5, 0.2), checkerMaterial(0x6070a0, 0x202838, 6));
+        panel.castShadow = true;
+        panel.receiveShadow = true;
+        panel.visible = false;
+        scene.add(panel);
+        const sunColor = sun.color.clone();
+        const skyColor = hemisphere.color.clone();
+
         const back = BASE_POSITION.clone().sub(BASE_TARGET).normalize();
         const side = new THREE.Vector3(back.z, 0, -back.x).normalize();
         const offset = new THREE.Vector3();
@@ -158,13 +187,42 @@ export function createCourtyard(mode: 'track' | 'cuts'): SceneFactory {
                 lookDirection.copy(target).sub(camera.position).applyAxisAngle(THREE.Object3D.DEFAULT_UP, frame >= at('cut-back').start ? 0 : (pan * Math.PI) / 180);
                 camera.lookAt(lookDirection.add(camera.position));
             }
-            // Fade to 5 % over 30 frames and back; a one-frame ×6 flash.
+            //* Appended Cases (frame 300 on)
+            if (name === 'whip-pan' || name === 'hold-3') {
+                const degrees = WHIP_STEP * (name === 'whip-pan' ? local + 1 : 10);
+                lookDirection.copy(BASE_TARGET).sub(BASE_POSITION).applyAxisAngle(THREE.Object3D.DEFAULT_UP, (degrees * Math.PI) / 180);
+                camera.position.copy(BASE_POSITION);
+                camera.lookAt(lookDirection.add(camera.position));
+            }
+            if (name === 'cut-sky') {
+                camera.position.set(0, 1, 2);
+                camera.lookAt(0, 8, -6);
+            } else if (name === 'cut-sky-2') {
+                camera.position.set(6, 1, -12);
+                camera.lookAt(-2, 8, -13);
+            } else if (name === 'cut-palette' || name === 'hold-5') {
+                camera.position.set(12, 4.5, -3);
+                camera.lookAt(-3, 1.2, -10);
+            }
+            panel.visible = name === 'sweep';
+            if (panel.visible) panel.position.set(-6 + 0.6 * local, 2.5, 6);
+            // Fade to 5 % over 30 frames and back; a one-frame ×6 flash; a step to 15 % and back.
             let light = 1;
             if (name === 'fade') light = 1 - 0.95 * (local < 30 ? (local + 1) / 30 : (59 - local) / 30);
             if (name === 'flash' && local === 0) light = 6;
+            if (name === 'lights-off') light = 0.15;
             sun.intensity = 2.8 * light;
             hemisphere.intensity = 0.8 * light;
             (scene.background as THREE.Color).copy(background).multiplyScalar(light);
+            // Another location: warm evening light and sky.
+            const palette = name === 'cut-palette' || name === 'hold-5';
+            sun.color.copy(sunColor);
+            hemisphere.color.copy(skyColor);
+            if (palette) {
+                sun.color.set(0xff9a50);
+                hemisphere.color.set(0xffb070);
+                (scene.background as THREE.Color).set(0x8a4a30);
+            }
             props.position.set(0, 0, 0);
             return { segment: name, cut: name.startsWith('cut-') && local === 0 };
         }

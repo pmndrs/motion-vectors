@@ -16,7 +16,9 @@
  *   matrix vs the build-time trap (setProjectionMatrix(null) before).
  * - water: geometric swell (oracle) vs shading motion (glint, ripples: warp audit).
  * - track: per segment, the new bar (Q19's motion types in the lab's scene).
- * - cuts: histogram distances at hard and similar cuts vs fade / flash / fast pan.
+ * - cuts: the two cut detectors side by side (luma histogram EMD vs the
+ *   depth-consistency share) on cuts and on the events that must not fire,
+ *   with before / at / depth-map pictures per event.
  * - probe: one --request (or an array), prints per-object errors.
  *
  * Usage:
@@ -370,27 +372,99 @@ async function track(run, screenshot) {
     return { segments: rows, maxEMD: Math.max(...result.frames.map((frame) => frame.cutEMD ?? 0)), maxJS: Math.max(...result.frames.map((frame) => frame.cutJS ?? 0)) };
 }
 
+/** What each cut-timeline segment is, and whether a detector should fire on it. */
+const CUT_EVENTS = {
+    'cut-hard': { cut: true, label: 'Hard cut to another angle' },
+    'cut-similar': { cut: true, label: 'Cut between similar shots' },
+    fade: { cut: false, label: 'Fade to 5 % and back' },
+    flash: { cut: false, label: 'One-frame ×6 flash' },
+    'pan-fast': { cut: false, label: 'Pan, 3°/frame' },
+    'cut-back': { cut: true, label: 'Cut back after a pan' },
+    'whip-pan': { cut: false, label: 'Whip pan, 9°/frame' },
+    'cut-back-2': { cut: true, label: 'Cut back after a whip pan' },
+    sweep: { cut: false, label: 'Near occluder sweeps across' },
+    'lights-off': { cut: false, label: 'Lights step to 15 %' },
+    'lights-on': { cut: false, label: 'Lights step back up' },
+    'cut-sky': { cut: true, label: 'Cut to a sky-heavy shot' },
+    'cut-sky-2': { cut: true, label: 'Cut between two sky-heavy shots' },
+    'cut-palette': { cut: true, label: 'Cut to another location (palette)' },
+};
+/** Thresholds the comparison is read at (EMD: Phase 0's, fit on Q10). */
+const CUT_THRESHOLDS = { emd: 0.5, depth: 0.2 };
+
 async function cuts(run, screenshot) {
     const result = await run({ scene: 'cuts' });
-    const series = result.frames.map((frame) => ({ frame: frame.frame, segment: frame.segment, cut: frame.cut, js: frame.cutJS, emd: frame.cutEMD }));
-    const atCuts = series.filter((row) => row.cut);
-    const events = bySegment(series.map((row) => ({ ...row })), result.segments)
-        .filter((segment) => !segment.name.startsWith('cut-'))
-        .map((segment) => ({
+    const series = result.frames.map((frame) => {
+        const depth = frame.cutDepth;
+        const entering = depth?.entering ?? 0;
+        const background = depth?.background ?? 0;
+        // Background (no surface) carries no evidence either way: leave it out of
+        // both counts. Content from off-screen stays in: at a cut, most of the new
+        // shot was off-screen in the old camera. Under 5 % surface: no verdict.
+        const surface = 1 - background;
+        const inconsistent = depth ? depth.noneValid - depth.backgroundUnscored : 0;
+        return {
+            frame: frame.frame,
+            segment: frame.segment,
+            cut: frame.cut,
+            js: frame.cutJS,
+            emd: frame.cutEMD,
+            depthRaw: depth?.noneValid ?? null,
+            entering,
+            background,
+            depth: depth && surface >= 0.05 ? inconsistent / surface : null,
+        };
+    });
+    const max = (rows, key) => Math.max(0, ...rows.map((row) => row[key] ?? 0));
+    const events = [];
+    for (const segment of result.segments) {
+        const info = CUT_EVENTS[segment.name];
+        if (!info) continue;
+        const rows = series.filter((row) => row.segment === segment.name);
+        // A cut is judged on its cut frame; anything else on its worst frame.
+        const judged = info.cut ? rows.filter((row) => row.cut) : rows;
+        const peak = (key) => judged.reduce((best, row) => ((row[key] ?? -1) > (best?.[key] ?? -1) ? row : best), null);
+        const at = peak('depth');
+        events.push({
             segment: segment.name,
-            maxEMD: Math.max(...segment.frames.map((row) => row.emd ?? 0)),
-            maxJS: Math.max(...segment.frames.map((row) => row.js ?? 0)),
-        }));
-    // Cut segments without their cut frame (the holds after a cut).
-    const afterCuts = series.filter((row) => row.segment.startsWith('cut-') && !row.cut);
-    for (const row of atCuts) console.log(`  ${row.segment.padEnd(14)} frame ${String(row.frame).padStart(3)}   EMD ${fmt(row.emd)}   JS ${fmt(row.js)}`);
-    for (const row of events) console.log(`  ${row.segment.padEnd(14)} max         EMD ${fmt(row.maxEMD)}   JS ${fmt(row.maxJS)}`);
-    console.log(`  ${'after cuts'.padEnd(14)} max         EMD ${fmt(Math.max(...afterCuts.map((row) => row.emd ?? 0)))}   JS ${fmt(Math.max(...afterCuts.map((row) => row.js ?? 0)))}`);
-    for (const frame of [29, 30, 60, 90]) {
-        await run({ scene: 'cuts', end: frame, view: 'output' });
-        await screenshot(`cuts-f${frame}`);
+            ...info,
+            start: segment.start,
+            emd: max(judged, 'emd'),
+            js: max(judged, 'js'),
+            depth: max(judged, 'depth'),
+            depthRaw: max(judged, 'depthRaw'),
+            entering: max(judged, 'entering'),
+            background: max(judged, 'background'),
+            emdFrame: peak('emd')?.frame,
+            depthFrame: at?.frame,
+        });
     }
-    return { atCuts, events, series };
+    // Holds after cuts and the plain holds: the steady-state floor of each signal.
+    const quiet = series.filter((row) => !CUT_EVENTS[row.segment] || (CUT_EVENTS[row.segment].cut && !row.cut));
+    const floor = { emd: max(quiet, 'emd'), depth: max(quiet, 'depth'), depthRaw: max(quiet, 'depthRaw') };
+    const verdict = (value, threshold, cut) => (value > threshold ? (cut ? 'hit' : 'FALSE') : cut ? 'MISS' : 'ok');
+    console.log(`  ${'event'.padEnd(36)} ${'EMD'.padStart(8)}       ${'depth'.padStart(8)}       ${'raw'.padStart(8)} ${'enter'.padStart(8)} ${'bg'.padStart(8)}`);
+    for (const row of events)
+        console.log(
+            `  ${row.label.padEnd(36)} ${fmt(row.emd)} ${verdict(row.emd, CUT_THRESHOLDS.emd, row.cut).padEnd(5)} ${fmt(row.depth)} ${verdict(row.depth, CUT_THRESHOLDS.depth, row.cut).padEnd(5)} ${fmt(row.depthRaw)} ${fmt(row.entering)} ${fmt(row.background)}`,
+        );
+    console.log(`  ${'quiet frames (max)'.padEnd(36)} ${fmt(floor.emd)}       ${fmt(floor.depth)}       ${fmt(floor.depthRaw)}`);
+
+    // Pictures per event: the frame before, the event frame, and where depth says "no motion reprojects".
+    const shots = [];
+    for (const row of events) {
+        const frame = row.cut ? row.start : (row.depthFrame ?? row.emdFrame ?? row.start);
+        for (const [view, end, name] of [
+            ['output', frame - 1, 'before'],
+            ['output', frame, 'at'],
+            ['audit-cut', frame, 'depth'],
+        ]) {
+            await run({ scene: 'cuts', end, start: end, view });
+            await screenshot(`cuts-${row.segment}-${name}`);
+        }
+        shots.push({ segment: row.segment, frame });
+    }
+    return { thresholds: CUT_THRESHOLDS, events, floor, series, shots };
 }
 
 async function probe(run, screenshot) {

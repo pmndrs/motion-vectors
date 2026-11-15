@@ -17,7 +17,10 @@
  * Statistics (one slot of `STATS_STRIDE` u32 per invocation) are reduced per
  * workgroup and added atomically: per candidate the residual sum (×1024
  * fixed point), valid / best / unexplained / beaten / moving counts, then the count of
- * pixels no candidate could score and the pixel total. The same pass with the
+ * pixels no candidate could score, the pixel total, the count of unscored
+ * pixels whose first motion candidate comes from off-screen (content entering
+ * the frame: not evidence of a cut), the count of background pixels (camera
+ * motion's w = 0: no surface) and of those the unscored ones. The same pass with the
  * depth test off and `previous` = a reference image measures |current − ref|.
  */
 export const RESIDUAL_FIXED_POINT = 1024;
@@ -59,7 +62,7 @@ const FIXED : f32 = ${RESIDUAL_FIXED_POINT}.0;
 const STRIDE : u32 = ${STATS_STRIDE}u;
 const FIELDS : u32 = ${CANDIDATE_FIELDS}u;
 const CANDIDATES : u32 = ${MAX_CANDIDATES}u;
-const WORDS : u32 = ${MAX_CANDIDATES * CANDIDATE_FIELDS + 2}u;
+const WORDS : u32 = ${MAX_CANDIDATES * CANDIDATE_FIELDS + 5}u;
 
 @group(0) @binding(0) var<uniform> R : ResidualConstants;
 @group(0) @binding(1) var current : texture_2d<f32>;
@@ -119,6 +122,7 @@ fn main(
         var shift : array<vec2f, CANDIDATES>;
         var best = 1e9;
         var bestIndex = CANDIDATES;
+        var entering = false;
         for (var k = 0u; k < CANDIDATES; k++) {
             residual[k] = 0.0;
             valid[k] = false;
@@ -127,7 +131,10 @@ fn main(
             let uvMotion = readMotion(k, uv) * vec2f(0.5, -0.5);
             shift[k] = uvMotion * R.size;
             let prevUV = uv - uvMotion;
-            if (any(prevUV < vec2f(0.0)) || any(prevUV > vec2f(1.0))) { continue; }
+            if (any(prevUV < vec2f(0.0)) || any(prevUV > vec2f(1.0))) {
+                if (k == 1u) { entering = true; }
+                continue;
+            }
             if (!depthValid(uv, prevUV)) { continue; }
             let lp = conditionedLuma(textureSampleLevel(previous, linearSampler, prevUV, 0.0).rgb);
             residual[k] = abs(lc - lp);
@@ -150,16 +157,26 @@ fn main(
                 if (best <= 0.5 * R.threshold) { atomicAdd(&partial[base + 4u], 1u); }
             }
         }
-        if (bestIndex == CANDIDATES) { atomicAdd(&partial[CANDIDATES * FIELDS], 1u); }
+        let background = textureLoad(cameraMotion, texel(uv, R.depthSize), 0).w <= 0.0;
+        if (background) { atomicAdd(&partial[CANDIDATES * FIELDS + 3u], 1u); }
+        if (bestIndex == CANDIDATES) {
+            atomicAdd(&partial[CANDIDATES * FIELDS], 1u);
+            if (background) {
+                atomicAdd(&partial[CANDIDATES * FIELDS + 4u], 1u);
+            } else if (entering) {
+                atomicAdd(&partial[CANDIDATES * FIELDS + 2u], 1u);
+            }
+        }
         atomicAdd(&partial[CANDIDATES * FIELDS + 1u], 1u);
 
         if ((R.flags & 2u) != 0u) {
             let shade = vec3f(0.35 * lc);
             var color = vec4f(shade, 1.0);
             if (R.debugMode == 0u) {
-                if (bestIndex == CANDIDATES) {
+                // Background (no surface) stays shaded: it is no evidence either way.
+                if (bestIndex == CANDIDATES && !background) {
                     color = vec4f(0.1, 0.25, 0.85, 1.0);
-                } else if (best > R.threshold) {
+                } else if (bestIndex < CANDIDATES && best > R.threshold) {
                     // Nothing explains it: shading change, or every motion is wrong.
                     color = vec4f(mix(0.4, 1.0, saturate(best * 8.0)), 0.05, 0.05, 1.0);
                 } else if (R.candidateCount >= 1u && valid[1] && residual[1] > R.threshold) {

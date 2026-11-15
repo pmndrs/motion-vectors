@@ -40,6 +40,8 @@ export interface CameraMatrices {
     viewProjection: ArrayLike<number>;
     inverseViewProjectionJittered: ArrayLike<number>;
     view: ArrayLike<number>;
+    /** The depth buffer's clear value: 1 (default), or 0 for reversed depth. Marks background pixels. */
+    backgroundDepth?: number;
 }
 
 /** One candidate's warp statistics for a residual slot. */
@@ -64,6 +66,16 @@ export interface ResidualStats {
     candidates: CandidateStats[];
     /** Share of pixels no candidate could score (disocclusion / off-screen). */
     noneValid: number;
+    /**
+     * Share of pixels no candidate could score where the first motion candidate
+     * comes from off-screen: content entering the frame (a pan), not evidence of a cut.
+     * Background pixels are not counted here.
+     */
+    entering: number;
+    /** Share of pixels at the depth clear value (no surface): no evidence of continuity either way. */
+    background: number;
+    /** Share of pixels that are background and that no candidate could score. */
+    backgroundUnscored: number;
     pixels: number;
 }
 
@@ -328,6 +340,7 @@ export class MotionAnalyzer<THandle = GPUTexture> {
         data.set(viewZRow, 48);
         data.set(this._hasPrevious ? this._prevViewZRow : viewZRow, 52);
         data.set([this._width, this._height, 1 / this._width, 1 / this._height], 56);
+        data[60] = matrices.backgroundDepth ?? 1;
         this.device.queue.writeBuffer(this._motionConstants, 0, data);
         this._prevViewProjection.set(Array.from(matrices.viewProjection));
         this._prevViewZRow.set(viewZRow);
@@ -578,7 +591,14 @@ export function decodeStats(
                 moving: share(words[offset + 5]),
             });
         }
-        residuals.push({ candidates, noneValid: share(words[base + MAX_CANDIDATES * CANDIDATE_FIELDS]), pixels });
+        residuals.push({
+            candidates,
+            noneValid: share(words[base + MAX_CANDIDATES * CANDIDATE_FIELDS]),
+            entering: share(words[base + MAX_CANDIDATES * CANDIDATE_FIELDS + 2]),
+            background: share(words[base + MAX_CANDIDATES * CANDIDATE_FIELDS + 3]),
+            backgroundUnscored: share(words[base + MAX_CANDIDATES * CANDIDATE_FIELDS + 4]),
+            pixels,
+        });
     }
     const histograms: (Uint32Array | null)[] = [];
     for (let slot = 0; slot < HISTOGRAM_SLOTS; slot++) {

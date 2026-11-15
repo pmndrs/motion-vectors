@@ -270,6 +270,52 @@ everything else (≈ 9× margin), because a cut is exactly the frame where geome
 stops being continuous. Lighting changes don't touch depth at all. It needs
 depth, so the histogram stays the fallback for depth-less inputs (pixi, video).
 
+### Cut detection, side by side (2026-11-15)
+
+The cut timeline gained seven cases from frame 300 on (the first 300 frames are
+unchanged): a 9°/frame whip pan, a near occluder sweeping across, a lighting step
+down and up, cuts onto and between sky-heavy shots, and a cut that also changes
+the palette. `npm run measure -- --experiments cuts` prints both detectors per
+event and saves the frame before, the event frame and the depth map
+(`view: 'audit-cut'`) for each. A cut is judged on its cut frame, anything else
+on its worst frame.
+
+The depth signal is now the share of **surface** pixels that no realistic
+candidate (zero, three's velocity, camera motion from depth; not the oracle)
+maps onto a matching previous depth. Background pixels (depth at the clear
+value) are flagged by the camera-motion pass (`w = 0`) and left out of both
+counts: before, the sky failed the depth test whenever the camera turned, and the
+whip pan read 0.39. Content arriving from off-screen stays in the count. A first
+try that left it out hid three cuts, because at a cut most of the new shot was
+off-screen in the old camera too.
+
+| Event | Truth | Histogram EMD (0.5) | Depth share (0.2) |
+|---|---|---|---|
+| Hard cut to another angle | cut | 0.344 miss | 0.304 hit |
+| Cut between similar shots | cut | 0.355 miss | 0.634 hit |
+| Cut back after a pan | cut | 0.915 hit | 0.984 hit |
+| Cut back after a whip pan | cut | 0.913 hit | 1.000 hit |
+| Cut to a sky-heavy shot | cut | 3.307 hit | 0.002 miss* |
+| Cut between two sky-heavy shots | cut | 0.115 miss | 0.497 hit |
+| Cut to another location (palette) | cut | 2.502 hit | 0.930 hit |
+| Fade to 5 % and back | — | 0.346 | 0.000 |
+| One-frame ×6 flash | — | **14.193 false** | 0.000 |
+| Pan, 3°/frame | — | 0.066 | 0.002 |
+| Whip pan, 9°/frame | — | 0.133 | 0.160 |
+| Near occluder sweeps across | — | 0.362 | 0.117 |
+| Lights step to 15 % / back up | — | **4.219 false** | 0.000 |
+| Quiet frames (max) | — | 0.179 | 0.000 |
+
+Depth consistency gets 13 of 14 right: the weakest detected cut reads 0.30 and
+the worst non-cut 0.16, so the 0.2 threshold has a 1.9× margin below it. The
+histogram gets 8: no threshold separates its in-scene cuts (0.34–0.36) from a
+lighting step (4.2). \*The sky-shot miss is history that is still valid: the only
+surfaces in frame (wall and pillar tops) were in the old camera's view too, at
+the depth the reprojection expects. The detector answers "is history still
+usable?", which is the question a temporal consumer has. Its false positives
+also cost less: a reset during a whip pan loses little, while the histogram's
+false positives land on still frames, where a reset is a visible re-convergence.
+
 ## 8. Phase 2: the three node (2026-11-14, r187)
 
 `MotionVectors` (`src/three/MotionVectors.ts`) puts its own `velocity` node in
