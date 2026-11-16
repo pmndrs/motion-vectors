@@ -124,6 +124,9 @@ describe('decodeStats', () => {
         const base = 2 * STATS_STRIDE;
         words[base + MAX_CANDIDATES * CANDIDATE_FIELDS + 1] = 100; // pixels
         words[base + MAX_CANDIDATES * CANDIDATE_FIELDS] = 10; // none valid
+        words[base + MAX_CANDIDATES * CANDIDATE_FIELDS + 2] = 4; // of which entering
+        words[base + MAX_CANDIDATES * CANDIDATE_FIELDS + 3] = 20; // background
+        words[base + MAX_CANDIDATES * CANDIDATE_FIELDS + 4] = 3; // background, unscored
         // candidate 1: residual sum 0.5 over 50 valid pixels, 40 best, 5 unexplained, 2 beaten
         const c1 = base + CANDIDATE_FIELDS;
         words.set([Math.round(0.5 * 1024), 50, 40, 5, 2, 30], c1);
@@ -133,6 +136,7 @@ describe('decodeStats', () => {
         const slot = stats.residuals[2]!;
         expect(slot.pixels).toBe(100);
         expect(slot.noneValid).toBeCloseTo(0.1);
+        expect(slot).toMatchObject({ entering: 0.04, background: 0.2, backgroundUnscored: 0.03 });
         expect(slot.candidates[1].meanResidual).toBeCloseTo(0.01, 4);
         expect(slot.candidates[1]).toMatchObject({ valid: 0.5, best: 0.4, unexplained: 0.05, beaten: 0.02, moving: 0.3 });
         expect(stats.histograms[0]).toBeNull();

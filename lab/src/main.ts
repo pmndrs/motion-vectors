@@ -45,7 +45,8 @@ const SCENES: Record<string, SceneFactory> = {
     cuts: createCourtyard('cuts'),
 };
 
-type LabView = 'output' | 'audit' | 'audit-heat' | 'audit-motion';
+/** `audit-cut`: the cut slot's classification (blue = no realistic motion reprojects onto matching depth). */
+type LabView = 'output' | 'audit' | 'audit-heat' | 'audit-motion' | 'audit-cut';
 type MotionSource = 'three' | 'node';
 
 interface LabRequest {
@@ -99,6 +100,12 @@ interface FrameRecord {
     audit: ResidualStats | null;
     cutJS: number | null;
     cutEMD: number | null;
+    /**
+     * Depth-consistency cut signal: the audit with only the candidates a real
+     * detector has (zero, three, camera; no oracle). `noneValid` is the raw share,
+     * `entering` the part of it that came from off-screen.
+     */
+    cutDepth: ResidualStats | null;
     /** GPU milliseconds of the scene render (shadow + MRT passes), with `timing`. */
     renderMs?: number;
 }
@@ -315,8 +322,23 @@ async function run(request: LabRequest): Promise<{ frames: FrameRecord[]; object
                       : view === 'audit-motion'
                         ? { mode: RESIDUAL_DEBUG_MOTION, candidate }
                         : undefined;
-            if (previousInput)
-                analyzer.encodeResidual(late, { slot: 0, current: gpu(color), previous: previousInput, motions: [...motions, gpu(oracleTexture)], debug });
+            if (previousInput) {
+                const cutView = view === 'audit-cut';
+                analyzer.encodeResidual(late, {
+                    slot: 0,
+                    current: gpu(color),
+                    previous: previousInput,
+                    motions: [...motions, gpu(oracleTexture)],
+                    debug: cutView ? undefined : debug,
+                });
+                analyzer.encodeResidual(late, {
+                    slot: 1,
+                    current: gpu(color),
+                    previous: previousInput,
+                    motions,
+                    debug: cutView ? { mode: RESIDUAL_DEBUG_CLASSIFY } : undefined,
+                });
+            }
             analyzer.encodeSnapshot(late, 'input', gpu(color));
             analyzer.endFrame();
             device.queue.submit([late.finish()]);
@@ -327,7 +349,7 @@ async function run(request: LabRequest): Promise<{ frames: FrameRecord[]; object
             const compare: Record<string, CompareObjectStats> = {};
             for (const [id, objectStats] of (stats.compare ?? []).entries())
                 if (objectStats.valid + objectStats.noPrevious > 0) compare[lab.objects[id] ?? `id-${id}`] = objectStats;
-            frames.push({ frame, segment: truth.segment, cut: truth.cut, jittered, compare, audit: stats.residuals[0], cutJS, cutEMD, renderMs });
+            frames.push({ frame, segment: truth.segment, cut: truth.cut, jittered, compare, audit: stats.residuals[0], cutJS, cutEMD, cutDepth: stats.residuals[1], renderMs });
         }
     } finally {
         if (trap) velocity.setProjectionMatrix(velocityProjection);
