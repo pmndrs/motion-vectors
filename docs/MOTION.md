@@ -270,7 +270,87 @@ everything else (≈ 9× margin), because a cut is exactly the frame where geome
 stops being continuous. Lighting changes don't touch depth at all. It needs
 depth, so the histogram stays the fallback for depth-less inputs (pixi, video).
 
-## 8. What's worth building next
+## 8. Phase 2: the three node (2026-11-14, r187)
+
+`MotionVectors` (`src/three/MotionVectors.ts`) puts its own `velocity` node in
+the MRT and keeps `positionPrevious` correct through every step three skips.
+The lab runs it as the `velocity` slot (`motion: 'node'`) on its own scene
+instances, next to three's numbers from the same scenes
+(`npm run measure -- --experiments node`, 1280×720, Apple M-series, Metal):
+
+| Case | Motion px/frame | three | node |
+|---|---|---|---|
+| Static displaced plane (`positionNode`) | 0 | 3.240 | **0.000** |
+| Animated displacement `sin(5x + 3t)` | 0.157 | 3.135 | **0.000** |
+| Morph target oscillating | 0.088 | 4.868 | **0.000** |
+| `positionNode` move A→B, moving | 3.121 | 51.857 | **0.000** |
+| `positionNode` move, held at B | 0 | 64+ | **0.000** |
+| Morph ramp 0→1, ramping / held | 0.192 / 0 | 5.703 / 11.613 | **0.000 / 0.000** |
+| Water swell (`positionNode`, time) | 0.388 | 11.844 | **0.000** |
+| Courtyard track, 2 / 4 renders per tick | 7.470 | 9.3 / 19.5 | **0.000 / 0.000** |
+| Same, without `beginFrame()` | 7.470 | 9.3 / 19.5 | 3.5 / 8.9 |
+| Rigid boxes, camera track (1 render/tick), jitter | up to 7.5 | 0.000 | 0.000 |
+| Object re-entering the frustum | 14.5 | 0.024 | 0.004 |
+
+Mean endpoint error in render pixels against the oracle; every node row is
+under the 0.01 px bar except the two un-driven multi-render rows, which need
+the app to call `beginFrame()` (nothing else can tell where a frame starts).
+The node also reads 0.000 at one render per tick without `beginFrame()`.
+
+### How it works
+
+- **Frame-keyed history (R1, R4).** The camera's previous view-projection and
+  each object's previous model matrix hand over once per frame, from an
+  explicit `beginFrame()` or three's frame counter, and every draw in a frame
+  sees the same previous value (`src/three/history.ts`). Frames are numbered by
+  the order they render: r187 also bumps three's `frameId` while precompiling
+  pipelines (`Renderer.js` `compileAsync`), and treating that skipped id as a
+  gap zeroed 4% of the track's frames before this was fixed. A key not drawn
+  last frame (an object back in the frustum) starts over at zero motion instead
+  of reusing a matrix from frames ago: 0.024 → 0.004 px on the re-entry case.
+- **Previous position (R5, R6, R9).** `NodeMaterial.setupPosition` is replaced
+  (once, page-wide, active only while an enabled `MotionVectors` exists and the
+  MRT has a `velocity` output) by r187's own sequence with `positionPrevious`
+  carried through morph targets (last frame's influences against a copy of the
+  position targets), `displacementMap` (the same offset both frames) and
+  `positionNode`. Skinning, batching and instancing run as three wrote them,
+  since they already move `positionPrevious` (R3).
+- **D1: `positionNode` re-evaluated at last frame's values.** Passed. The graph
+  is built a second time inside a parentless node cache (so every expression is
+  generated again), while a scoped hook in `Node.prototype.build` swaps
+  `positionLocal` for `positionPrevious` and every `UniformNode` for a
+  per-object, frame-keyed proxy that holds the uniform's value from last
+  frame's draw. Fn bodies are re-run in the fresh cache, so globals they read
+  (`time`, user uniforms) are swapped too. It needs no annotation from the
+  author: the lab's graphs are the plain ones apps write
+  (`positionLocal.add(vec3(progress(time)…))`, `positionGeometry.add(swell(time))`).
+- **Not covered (R7/R8, next):** `toVar()` variables created outside a Fn
+  (three keeps variables in its global cache, so the previous build would read
+  the current one), textures and storage buffers that change per frame,
+  per-instance morph textures (`mesh.morphTexture`: rigid fallback), and
+  displacement on skinned or morphed meshes (current normal used for both
+  frames). Skinning, instancing and batching are three's own previous data and
+  aren't in the lab yet.
+
+### Cost (R11)
+
+GPU time of the whole scene render (shadow + MRT passes, three's timestamps),
+interleaved three/node/node/three, 12 repetitions, median of per-repetition
+deltas (`npm run measure -- --experiments cost --reps 12`):
+
+| Scene | three's scene render | node − three |
+|---|---|---|
+| deformers | 0.355 ms | −13 µs (noise; repetitions −195…+166 µs) |
+| water | 0.356 ms | **+19 µs (+5.4 %)**, every repetition +2…+25 µs |
+| courtyard track | 0.376 ms | +10 µs (noise; −320…+94 µs) |
+
+The water swell is the one clear signal: its `positionNode` runs twice per
+vertex (current and previous). That is the price of R6 and scales with the
+graph's vertex cost; scenes without deformation read within noise. The
+laptop GPU idles between the lab's read-back frames, so absolute times are
+low-clock numbers; compare only within one run.
+
+## 9. What's worth building next
 
 The agreed spec and phased plan, with decision gates and the intended split
 into its own package, is [PLAN.md](PLAN.md).

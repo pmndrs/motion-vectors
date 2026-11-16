@@ -1,8 +1,9 @@
 # Motion vectors — spec and plan
 
-**Status (2026-11-14): Phase E (extraction) in progress.** Phases 0 and 1 ran
-incubating in [pmndrs/upscaler](https://github.com/pmndrs/upscaler); this repo
-took them over with their history and now builds on three **r187**. It will
+**Status (2026-11-14): Phase 2 (three node) in progress; D1 passed.** Phases 0
+and 1 ran incubating in [pmndrs/upscaler](https://github.com/pmndrs/upscaler);
+this repo took them over with their history and builds on three **r187**. The
+node meets every §4 oracle case (MOTION.md §8). It will
 publish as `@pmndrs/motion-vectors` at gate P. The evidence this plan builds on
 is the motion lab, [MOTION.md](MOTION.md).
 
@@ -87,7 +88,7 @@ Requirements. Each one maps to a measured failure (MOTION.md) and a lab test (§
 | R3 | Skinning, `InstancedMesh` and `BatchedMesh` stay exact. | Reuse three's `positionPrevious`. three fills it whenever the MRT has an output **named `velocity`**, so our node must take that slot name. |
 | R4 | Object history is per frame, not per draw. | A previous model matrix keyed on our frame counter. A second draw in the same frame (shadow pass, second view) must not overwrite it. |
 | R5 | Morph targets are exact. | Keep last frame's morph influences per mesh and compute the previous morphed position. |
-| R6 | `positionNode` is exact when the displacement depends only on uniforms (time, offsets, wave parameters). | Re-evaluate the `positionNode` graph with `positionLocal` → previous position and each uniform → last frame's value. three applies `positionNode` **last** (after morph, skinning, `displacementMap`, batching and instancing), so the previous position fed in is exactly the result of R3–R5. **Feasibility unverified: gate D1.** |
+| R6 | `positionNode` is exact when the displacement depends only on uniforms (time, offsets, wave parameters). | Re-evaluate the `positionNode` graph with `positionLocal` → previous position and each uniform → last frame's value. three applies `positionNode` **last** (after morph, skinning, `displacementMap`, batching and instancing), so the previous position fed in is exactly the result of R3–R5. **D1 passed (2026-11-14):** built as specified, exact on every lab case (MOTION.md §8). |
 | R7 | Deformation the node can't see (texture- or storage-driven `positionNode`, compute-written positions) gets an author hook. | An opt-in previous-position node per material, so the author supplies last frame's value. |
 | R8 | Anything still unknown is flagged, not guessed silently. | Rigid fallback (deformed position for both frames, which removes false motion but misses deformation motion), marked in `.z` and in a debug view. |
 | R9 | `displacementMap` is handled like R6, with the map treated as a uniform input. | Same mechanism. A static map is exact; an animated map texture falls under R7. |
@@ -179,7 +180,7 @@ three cut frames there and on none of the camera track's.
 ```
 src/index.ts          @pmndrs/motion-vectors        contract constants, CPU reference math
 src/webgpu/           @pmndrs/motion-vectors/webgpu MotionAnalyzer + WGSL passes, texture allocator
-src/three/            @pmndrs/motion-vectors/three  three glue; the velocity node lands here (Phase 2)
+src/three/            @pmndrs/motion-vectors/three  MotionVectors (the velocity node), texture glue
 lab/                  the acceptance harness: own scenes + oracle materials (Vite, :5611)
 scripts/              measure-motion.mjs (CDP driver, --check), verify-pack.mjs, lib/ (copied CDP helpers)
 test/                 GPU-free unit tests (vitest)
@@ -225,9 +226,10 @@ depth consistency, not the histogram (§3.3).
 3. ✅ Moved to three r187 and re-ran every experiment on a real GPU (MOTION.md §7):
    Phase 1's numbers reproduce, except the two r187 fixed or changed.
 4. ⬜ First push and a green CI run.
-5. ⬜ In the upscaler: drop the lab, scripts and contract from `packages/motion`,
-   keep `src/` frozen for its bench probe until 0.x is on npm. The motion part
-   of its `engine-contract.md` moves into CONTRACT.md then.
+5. ✅ In the upscaler: dropped the lab, scripts and contract from `packages/motion`,
+   kept `src/` frozen for its bench probe until 0.x is on npm
+   ([pmndrs/upscaler#108](https://github.com/pmndrs/upscaler/pull/108)). The motion
+   part of its `engine-contract.md` moves into CONTRACT.md then.
 
 **Exit:** this repo's CI is green and the lab reproduces Phase 1's numbers (met
 locally on Metal and SwiftShader); upscaler CI is green on the trimmed copy.
@@ -239,8 +241,17 @@ uniforms and `positionLocal` substituted, on r187.
 - **Partial** (works for some graph shapes): R6 for those, R7 hook for the rest, documented.
 - **Infeasible:** R7 hook plus the R8 flag. Animated displacement becomes opt-in.
 
-### Phase 2: three velocity node (new repo; size: M)
-- `/three`: R1–R12.
+**Result (2026-11-14): feasible.** The graph is rebuilt in a parentless node
+cache while a scoped `Node.prototype.build` hook swaps `positionLocal` and every
+uniform for last frame's values; Fn bodies re-run, so their globals swap too.
+0.000 px on every lab `positionNode` case (MOTION.md §8). Limits: `toVar()`
+outside a Fn, per-frame textures and storage (R7/R8).
+
+### Phase 2: three velocity node (in progress, 2026-11-14)
+- `/three`: R1–R12. Built: R1–R6, R9, R10 (`MotionVectors`), each exact in the
+  lab; R11 measured (+19 µs / +5.4 % on the water swell, the rest within
+  noise). Open: R3 lab cases (skinned, instanced, batched), R7 author hook,
+  R8 flag, R12 per-case feature detection.
 - Settle the reserved channels.
 
 **Exit:** every §4 case meets its oracle; the carried-over pass bars hold; the R11 cost is measured.
@@ -309,7 +320,7 @@ ships from there.
 | 2026-11-14 | Phase 1 done: lab self-contained under `packages/motion`, exact oracle, contract draft | Done |
 | 2026-11-14 | Extracted to pmndrs/motion-vectors with history; three r187 is the development baseline | Done (push pending) |
 | 2026-11-14 | Cut detection keys on depth consistency; the histogram is the depth-less fallback | Proposed (measured, MOTION.md §7) |
-| — | D1: `positionNode` previous feasibility | Pending (Phase 2) |
+| 2026-11-14 | D1: `positionNode` previous is feasible (graph rebuilt with substituted leaves) | Done (MOTION.md §8) |
 | — | P: publish 0.x | Pending (review by 2026-12-15, proposed) |
 | — | D3: optical flow | Pending (Phase 5) |
 

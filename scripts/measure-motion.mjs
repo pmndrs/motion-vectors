@@ -53,8 +53,9 @@ const USAGE = `Usage: node scripts/measure-motion.mjs [options]
   --name <file>          with probe: screenshot name (default probe)
   --adapter swiftshader  software WebGPU (CI, no GPU)
   --check                exit 1 unless the conformance bars hold
+  --reps <n>             with cost: interleaved repetitions (default 4)
 Writes results/<label>/.`;
-const cli = parseCliOrExit(process.argv.slice(2), ['experiments', 'width', 'height', 'label', 'url', 'port', 'request', 'name', 'adapter', 'check'], USAGE);
+const cli = parseCliOrExit(process.argv.slice(2), ['experiments', 'width', 'height', 'label', 'url', 'port', 'request', 'name', 'adapter', 'check', 'reps'], USAGE);
 const experiments = (cli.experiments ?? ALL.join(',')).split(',').filter(Boolean);
 const width = Number(cli.width ?? 1280);
 const height = Number(cli.height ?? 720);
@@ -228,6 +229,106 @@ async function jitter(run) {
     return summary;
 }
 
+/**
+ * This package's three node (src/three) against three's `velocity`, on every
+ * oracle case. The node fills the lab's `velocity` slot (`motion: 'node'`),
+ * so both read as candidate 1 of their own runs. Phase 2's exit: every object
+ * and segment within the exact bar.
+ */
+async function node(run) {
+    const summary = {};
+    // A --check run (CI, SwiftShader) only needs the node's bars: it skips
+    // three's runs and the un-driven rows, and shortens the track to its two
+    // dolly segments (several renders per tick still change history there).
+    const quick = cli.check === true;
+    const threeRun = (request) => (quick ? Promise.resolve(null) : run(request));
+    const header = '  scene/object/segment              px moved   three err   node err  >0.25px  >1px';
+    const row = (label, three, ours) => {
+        summary[label] = { three: three?.candidates[1].error ?? null, node: ours?.candidates[1].error ?? null, motion: ours?.motion ?? null };
+        if (!ours) return console.log(`  ${label.padEnd(32)}  (not visible)`);
+        console.log(
+            `  ${label.padEnd(32)} ${fmt(ours.motion)}  ${fmt(three?.candidates[1].error)}   ${fmt(ours.candidates[1].error)}  ${pct(ours.candidates[1].over025)} ${pct(ours.candidates[1].over1, 1, 5)}`,
+        );
+        expectExact(`node: ${label}`, ours, 1);
+    };
+    console.log(header);
+    for (const scene of ['deformers', 'cases', 'water']) {
+        const three = await threeRun({ scene });
+        const ours = await run({ scene, motion: 'node' });
+        for (const name of Object.values(ours.objects)) {
+            if (scene === 'cases' && name !== 'static') {
+                const threeSegments = three ? bySegment(three.frames, three.segments) : null;
+                bySegment(ours.frames, ours.segments).forEach((segment, i) =>
+                    row(`${scene} ${name} ${segment.name}`, threeSegments && compareSummary(threeSegments[i].frames, name), compareSummary(segment.frames, name)),
+                );
+            } else row(`${scene} ${name}`, three && compareSummary(three.frames, name), compareSummary(ours.frames, name));
+        }
+    }
+    const trackEnd = quick ? 175 : undefined;
+    for (const rendersPerTick of quick ? [2] : [1, 2, 4]) {
+        const pick = (result) => result && compareSummary(result.frames.filter((frame) => isMotion(frame.segment) && !frame.segment.startsWith('scene')), 'static');
+        const three = await threeRun({ scene: 'track', rendersPerTick, end: trackEnd });
+        const ours = await run({ scene: 'track', rendersPerTick, motion: 'node', end: trackEnd });
+        row(`track ${rendersPerTick} render(s)/tick`, pick(three), pick(ours));
+        if (quick) continue;
+        // Not driven: the node on three's frame counter, as an app that never calls beginFrame().
+        const undriven = await run({ scene: 'track', rendersPerTick, motion: 'node', driven: false });
+        const label = `track ${rendersPerTick}/tick, no beginFrame`;
+        if (rendersPerTick === 1) row(label, pick(three), pick(undriven));
+        else {
+            const summaryRow = pick(undriven);
+            summary[label] = { three: pick(three)?.candidates[1].error ?? null, node: summaryRow?.candidates[1].error ?? null };
+            console.log(`  ${label.padEnd(32)} ${fmt(summaryRow?.motion)}  ${fmt(pick(three)?.candidates[1].error)}   ${fmt(summaryRow?.candidates[1].error)}  (expected: needs beginFrame)`);
+        }
+    }
+    {
+        const pick = (result) => result && compareSummary(result.frames.filter((frame) => frame.jittered), 'static');
+        const three = await threeRun({ scene: 'track', end: 29, jitter: 10, velocityProjection: 'trap', fresh: true });
+        const ours = await run({ scene: 'track', end: 29, jitter: 10, motion: 'node', fresh: true });
+        row('track jitter on (three: trap)', pick(three), pick(ours));
+    }
+    return summary;
+}
+
+/**
+ * R11: the node's cost on the scene render against three's `velocity`, as GPU
+ * time of the whole scene render (shadow + MRT passes, three's timestamps),
+ * interleaved three/node/node/three per repetition so clock drift cancels.
+ */
+async function cost(run) {
+    const summary = {};
+    const reps = Number(cli.reps ?? 4);
+    const warmup = 10;
+    const mean = (result) => {
+        const values = result.frames.filter((frame) => frame.frame >= warmup && Number.isFinite(frame.renderMs)).map((frame) => frame.renderMs);
+        return values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
+    };
+    console.log('  scene        three ms    node ms  median Δus    Δ %   (per repetition: node − three, µs; % of three\'s scene render)');
+    for (const scene of ['deformers', 'water', 'track']) {
+        const end = scene === 'track' ? 240 : undefined;
+        const pairs = [];
+        for (let rep = 0; rep < reps; rep++) {
+            const order = rep % 2 === 0 ? ['three', 'node'] : ['node', 'three'];
+            const times = {};
+            for (const motion of [...order, ...[...order].reverse()]) {
+                const result = await run({ scene, end, motion, timing: true });
+                (times[motion] ??= []).push(mean(result));
+            }
+            const avg = (list) => list.reduce((a, b) => a + b, 0) / list.length;
+            pairs.push({ three: avg(times.three), node: avg(times.node) });
+        }
+        const three = pairs.reduce((a, p) => a + p.three, 0) / pairs.length;
+        const ours = pairs.reduce((a, p) => a + p.node, 0) / pairs.length;
+        const deltas = pairs.map((p) => (p.node - p.three) * 1000);
+        const median = [...deltas].sort((a, b) => a - b)[Math.floor(deltas.length / 2)];
+        summary[scene] = { threeMs: three, nodeMs: ours, deltaUs: deltas, medianDeltaUs: median, medianDeltaPct: median / (10 * three) };
+        console.log(
+            `  ${scene.padEnd(10)} ${fmt(three, 3, 9)}  ${fmt(ours, 3, 9)}  ${fmt(median, 1, 9)}  ${fmt(summary[scene].medianDeltaPct, 2, 7)}   (${deltas.map((d) => d.toFixed(0)).join(', ')})`,
+        );
+    }
+    return summary;
+}
+
 async function water(run, screenshot) {
     const result = await run({ scene: 'water' });
     console.log(COMPARE_HEADER);
@@ -307,7 +408,7 @@ async function probe(run, screenshot) {
     return Array.isArray(parsed) ? results : results[0];
 }
 
-const EXPERIMENTS = { oracle: oracleCheck, deformers, cases, ticks, jitter, water, track, cuts, probe };
+const EXPERIMENTS = { oracle: oracleCheck, deformers, cases, ticks, jitter, water, track, cuts, node, cost, probe };
 
 //* Harness
 async function main() {
@@ -352,7 +453,7 @@ async function main() {
         // Pin the viewport to the canvas, or headless Chrome clips its bottom rows.
         await client.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
         // Screenshots need the canvas; a --check run only reads GPU buffers, so it skips the present (lab main.ts).
-        await client.send('Page.navigate', { url: `${server.origin}/index.html${cli.check ? '?present=0' : ''}` });
+        await client.send('Page.navigate', { url: `${server.origin}/index.html?present=${cli.check ? 0 : 1}&timing=${experiments.includes('cost') ? 1 : 0}` });
         for (let attempt = 0; ; attempt++) {
             if ((await client.evaluate('window.__motionLab?.ready === true')) === true) break;
             if (attempt > 600) throw new Error(`Timed out waiting for the motion lab.\n${logs(client).join('\n')}`);

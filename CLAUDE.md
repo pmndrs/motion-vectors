@@ -12,6 +12,7 @@ npm run typecheck   # src, test, lab
 npm test            # vitest, GPU-free
 npm run build       # tsc → dist/
 npm run verify:pack # the tarball a consumer installs
+npm run examples    # example gallery, Vite, :5612 (imports the package by name → src/)
 npm run lab         # Vite, :5611
 npm run measure     # every lab experiment on the real GPU (headless Chrome + CDP)
 npm run check:gpu   # conformance bars; CI runs it with --adapter swiftshader --width 640 --height 360
@@ -43,3 +44,14 @@ npm run check:gpu   # conformance bars; CI runs it with --adapter swiftshader --
    (`motionCompare.ts`); larger frames need a coarser fixed point.
 6. `renderer.backend.get(texture).texture` is private three API
    (`src/three/textures.ts`): re-verify it on every three bump.
+7. **`MotionVectors` patches two three prototypes, once per page**
+   (`src/three/MotionVectors.ts`): `NodeMaterial.setupPosition` is replaced by
+   a copy of r187's sequence that also carries `positionPrevious`, and
+   `Node.prototype.build` gets a scoped substitution hook used only while a
+   previous `positionNode` builds. On a three bump, diff three's
+   `setupPosition` against the copy first.
+8. **three's `frameId` isn't consecutive**: r187's `compileAsync` bumps it too.
+   History keys on the order frames render (`frameOf`), never on raw ids.
+9. **Headless Linux Chrome can't present a WebGPU canvas on SwiftShader**
+   (no swapchain shared image; the instance is lost at the first present). CI
+   runs the lab with `?present=0`; every check reads GPU buffers, not pixels.

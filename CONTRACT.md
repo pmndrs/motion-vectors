@@ -65,9 +65,16 @@ on r187 (r186.1: 0.36 px). Rigid and
 camera motion are exact. Skinning, instancing and batching use three's own
 previous data and are not measured yet. Findings: [docs/MOTION.md](docs/MOTION.md) §7.
 
+This package's three node (`MotionVectors`, 2026-11-14, r187) reads under the
+0.01 px bar on every one of those cases, including 2 and 4 renders per tick
+when the app calls `beginFrame()`; without it, it follows three's frame counter
+and is exact at one render per tick only (docs/MOTION.md §8).
+
 ## Open before 0.x
 
 - Specify `.z` (flag values) and `.w` (linear depth: view-space or the engine's own).
-- Whether "previous frame" is advanced by an explicit `beginFrame()` only, or
-  also inferred (render id) when nothing drives it.
+- ~~Whether "previous frame" is advanced by an explicit `beginFrame()` only, or
+  also inferred when nothing drives it.~~ Both (three node): `beginFrame()`
+  when called, three's frame counter otherwise. Several renders per frame need
+  `beginFrame()`.
 - Babylon and pixi rows: run the audit before claiming either.
