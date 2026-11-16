@@ -31,25 +31,49 @@ import { MotionVectors, motionOutput } from '@pmndrs/motion-vectors/pixi';
  */
 
 const CHECK = new URLSearchParams(location.search).get('check') === '1';
+// Check mode never presents (CI's Linux SwiftShader can't): make a present fail
+// loudly on every platform, not only there.
+if (CHECK)
+    GPUCanvasContext.prototype.getCurrentTexture = function () {
+        throw new Error('pixi check: something rendered to the canvas; the check must render off screen only.');
+    };
 
 //* Application
+// Not a top-level await: pixi-3d's renderer hook imports a backend chunk during
+// init(), and in a production build that chunk imports back from this entry, so a
+// top-level await never resolves (the upscaler's docs/pixi.md has the details).
 const app = new Application();
-try {
-    await app.init({ resizeTo: window, preference: 'webgpu', antialias: false, backgroundColor: 0x1b1f26 });
-    if (!(app.renderer as { gpu?: unknown }).gpu) throw new Error('WebGPU is not available in this browser.');
-} catch (error) {
-    const box = document.getElementById('error')!;
-    box.style.display = 'grid';
-    box.textContent = `This example needs WebGPU. ${(error as Error).message}`;
-    throw error;
-}
-document.body.appendChild(app.canvas);
+let view!: View3D;
 
-const view = new View3D({ autoResize: true, resolution: 1, environment: { skyColor: 0xc8d8ff, groundColor: 0x403830, intensity: 0.9 } });
-app.stage.addChild(view);
-const sun = new DirectionalLight({ color: 0xffffff, intensity: 2.4 });
-sun.rotation.set(-Math.PI / 3, Math.PI / 5, 0);
-view.root.addChild(sun);
+async function start(): Promise<void> {
+    try {
+        // Check mode sizes the app itself: `resizeTo` renders to the canvas inside
+        // init(), and headless Linux Chrome on SwiftShader (CI) loses the WebGPU
+        // instance at the first canvas present. The check renders off screen only.
+        await app.init({
+            ...(CHECK ? { width: innerWidth, height: innerHeight, autoStart: false } : { resizeTo: window }),
+            preference: 'webgpu',
+            antialias: false,
+            backgroundColor: 0x1b1f26,
+        });
+        if (!(app.renderer as { gpu?: unknown }).gpu) throw new Error('WebGPU is not available in this browser.');
+    } catch (error) {
+        const box = document.getElementById('error')!;
+        box.style.display = 'grid';
+        box.textContent = `This example needs WebGPU. ${(error as Error).message}`;
+        throw error;
+    }
+    document.body.appendChild(app.canvas);
+
+    view = new View3D({ autoResize: true, resolution: 1, environment: { skyColor: 0xc8d8ff, groundColor: 0x403830, intensity: 0.9 } });
+    app.stage.addChild(view);
+    const sun = new DirectionalLight({ color: 0xffffff, intensity: 2.4 });
+    sun.rotation.set(-Math.PI / 3, Math.PI / 5, 0);
+    view.root.addChild(sun);
+
+    if (CHECK) check();
+    else demo();
+}
 
 const motion = new MotionVectors();
 const box = (color: number, size: [number, number, number]) =>
@@ -363,5 +387,4 @@ function check(): void {
     };
 }
 
-if (CHECK) check();
-else demo();
+void start();
