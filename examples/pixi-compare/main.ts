@@ -225,6 +225,11 @@ interface CheckState {
 }
 
 function check(): void {
+    // CI diagnostics: which adapter, and why a device was lost.
+    const gpu = (app.renderer as WebGPURenderer).gpu;
+    const info = gpu.adapter.info;
+    console.log(`pixi check: adapter ${info.vendor} ${info.architecture} ${info.device} ${info.description}`);
+    void gpu.device.lost.then((lost) => console.error(`pixi check: device lost (${lost.reason}): ${lost.message}`));
     for (const element of document.querySelectorAll<HTMLElement>('.label, #divider, #controls')) element.style.display = 'none';
     app.ticker.stop();
     const width = app.renderer.width;

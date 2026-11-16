@@ -11,9 +11,10 @@
  *   [--url http://127.0.0.1:5613] [--adapter swiftshader]
  */
 import { spawn } from 'node:child_process';
-import { mkdtemp } from 'node:fs/promises';
+import { openSync, readFileSync } from 'node:fs';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import { browserExecutable } from './lib/browser-executable.mjs';
 import { CDP } from './lib/cdp-client.mjs';
@@ -27,6 +28,8 @@ const height = Number(cli.height ?? 720);
 const port = parsePort(cli.port, '--port') ?? 9412;
 const server = resolveServerUrl(cli.url, 'http://127.0.0.1:5613');
 const EXACT = 0.01;
+const OUTPUT = resolve(import.meta.dirname, '..', 'results', 'pixi');
+const CHROME_LOG = join(OUTPUT, 'chrome.log');
 /** Cases that show a pixi-3d limit rather than ours (docs/PIXI.md, upstream asks). */
 const KNOWN_LIMITS = new Set(['camera moves, 2 renders']);
 
@@ -41,6 +44,7 @@ async function main() {
     let client = null;
     const failures = [];
     try {
+        await mkdir(OUTPUT, { recursive: true });
         try {
             await waitForUrl(server.origin, { attempts: 1 });
         } catch {
@@ -59,9 +63,12 @@ async function main() {
                 '--force-device-scale-factor=1',
                 ...(cli.adapter === 'swiftshader' ? ['--use-webgpu-adapter=swiftshader', '--enable-unsafe-swiftshader', '--enable-features=Vulkan'] : []),
                 ...(process.env.CI ? ['--no-sandbox'] : []),
+                // Extra Chrome flags (space-separated), as for the lab's driver.
+                ...(process.env.CHROME_FLAGS ?? '').split(' ').filter(Boolean),
                 'about:blank',
             ],
-            { stdio: 'ignore' },
+            // Chrome's own stderr (GPU process crashes, Dawn errors) goes next to the results.
+            { stdio: ['ignore', 'ignore', openSync(CHROME_LOG, 'w')] },
         );
         const cdpBase = `http://127.0.0.1:${port}`;
         await waitForUrl(`${cdpBase}/json/version`);
@@ -98,6 +105,7 @@ async function main() {
                 if (!(r.ours.mean <= bar)) failures.push(`${row.name} / ${region}: mean ${r.ours.mean.toFixed(4)} px (bar ${bar.toFixed(4)})`);
             }
         const records = logs(client);
+        await writeFile(join(OUTPUT, 'browser-log.txt'), `${records.join('\n')}\n`);
         if (records.some((line) => /error|exception|validation|invalid/i.test(line))) {
             console.warn(`\nbrowser log:\n${records.join('\n')}`);
             failures.push('browser log has errors');
@@ -126,5 +134,11 @@ function logs(client) {
 
 main().catch((error) => {
     console.error(error);
+    try {
+        const tail = readFileSync(CHROME_LOG, 'utf8').trim().split('\n').slice(-40).join('\n');
+        if (tail) console.error(`\nchrome.log (last 40 lines):\n${tail}`);
+    } catch {
+        // no Chrome log yet
+    }
     process.exitCode = 1;
 });
