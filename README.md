@@ -39,7 +39,12 @@ renderer.setAnimationLoop(() => {
 
 - **Jitter:** set `motion.projectionMatrix` to the unjittered projection (any
   `Matrix4`, read every frame); without it the camera's own projection is used.
-- **Cuts:** `motion.reset()` makes the next frame report zero motion.
+- **Output:** the `velocity` slot gets the full contract texel
+  ([CONTRACT.md](CONTRACT.md)): `.xy` motion, `.z` a `MotionFlag` (1 exact,
+  3 rigid fallback, 4 no previous position), `.w` the previous linear depth.
+  Give it an `rgba16float` texture to keep `.zw`.
+- **Cuts:** `motion.reset()` makes the next frame report zero motion, flagged
+  as no previous position.
 - **`positionNode`** graphs are re-evaluated with last frame's uniforms and
   previous position automatically. Not covered yet: `toVar()` variables made
   outside a `Fn`, textures or storage buffers that change per frame

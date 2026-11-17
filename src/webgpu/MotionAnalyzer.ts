@@ -6,6 +6,7 @@ import {
     COMPARE_CANDIDATE_WORDS,
     COMPARE_CANDIDATES,
     COMPARE_CONSTANTS_BYTES,
+    COMPARE_DEPTH_FIXED_POINT,
     COMPARE_FIXED_POINT,
     COMPARE_HEADER_WORDS,
     COMPARE_OBJECT_STRIDE,
@@ -87,6 +88,12 @@ export interface CompareCandidateStats {
     over025: number;
     /** Share of the object's valid pixels with an error above 1 px. */
     over1: number;
+    /** Mean relative error of `.w` (previous linear depth) where the candidate's flag claims a previous position (per-pixel values capped at 0.5). */
+    depthError: number;
+    /** Pixels behind {@link CompareCandidateStats.depthError}. */
+    depthPixels: number;
+    /** Covered pixels whose `.z` flag contradicts the oracle (CONTRACT.md "Flag"): no previous position claimed where there was one, or the reverse. */
+    wrongFlags: number;
 }
 
 /** Oracle comparison for one object id. */
@@ -341,6 +348,7 @@ export class MotionAnalyzer<THandle = GPUTexture> {
         data.set(this._hasPrevious ? this._prevViewZRow : viewZRow, 52);
         data.set([this._width, this._height, 1 / this._width, 1 / this._height], 56);
         data[60] = matrices.backgroundDepth ?? 1;
+        data[61] = this._hasPrevious ? 1 : 0;
         this.device.queue.writeBuffer(this._motionConstants, 0, data);
         this._prevViewProjection.set(Array.from(matrices.viewProjection));
         this._prevViewZRow.set(viewZRow);
@@ -622,10 +630,14 @@ export function decodeCompare(words: Uint32Array): CompareObjectStats[] {
         const candidates: CompareCandidateStats[] = [];
         for (let k = 0; k < COMPARE_CANDIDATES; k++) {
             const offset = base + COMPARE_HEADER_WORDS + k * COMPARE_CANDIDATE_WORDS;
+            const depthPixels = words[offset + 4];
             candidates.push({
                 meanError: per(words[offset] / COMPARE_FIXED_POINT),
                 over025: per(words[offset + 1]),
                 over1: per(words[offset + 2]),
+                depthError: depthPixels ? words[offset + 3] / COMPARE_DEPTH_FIXED_POINT / depthPixels : 0,
+                depthPixels,
+                wrongFlags: words[offset + 5],
             });
         }
         objects.push({ valid, noPrevious: words[base + 1], meanMotion: per(words[base + 2] / COMPARE_FIXED_POINT), candidates });

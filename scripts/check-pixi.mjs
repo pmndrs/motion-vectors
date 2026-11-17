@@ -6,6 +6,8 @@
  * that only translates, so every point of each moves by one NDC delta,
  * projected on the CPU from the camera's matrices. Exact means a mean error
  * under 0.01 render px (CONTRACT.md) plus one f16 step of the stored value.
+ * The contract's `.z` flag must match on every pixel and `.w` (previous linear
+ * depth) must hold the expected depth as f16 stores it.
  *
  * Usage: node scripts/check-pixi.mjs [--width 1280] [--height 720] [--port 9412]
  *   [--url http://127.0.0.1:5613] [--adapter swiftshader]
@@ -28,6 +30,8 @@ const height = Number(cli.height ?? 720);
 const port = parsePort(cli.port, '--port') ?? 9412;
 const server = resolveServerUrl(cli.url, 'http://127.0.0.1:5613');
 const EXACT = 0.01;
+/** Mean relative `.w` error allowed: one f16 step (2^-11) of rounding at most. */
+const DEPTH_EXACT = 2 ** -11;
 const OUTPUT = resolve(import.meta.dirname, '..', 'results', 'pixi');
 const CHROME_LOG = join(OUTPUT, 'chrome.log');
 /** Cases that show a pixi-3d limit rather than ours (docs/PIXI.md, upstream asks). */
@@ -87,15 +91,20 @@ async function main() {
         const cases = result.result.value;
         const size = await client.evaluate('window.__pixiMotion.size');
         console.log(`pixi-3d check, ${size[0]}×${size[1]}: mean / max endpoint error in render px against analytic motion`);
-        console.log(`  ${'case'.padEnd(24)} ${'region'.padEnd(9)} ${'motion px'.padStart(9)} ${'ours mean'.padStart(9)} ${'ours max'.padStart(8)} ${'pixi mean'.padStart(9)} ${'pixi max'.padStart(8)}`);
+        console.log(
+            `  ${'case'.padEnd(24)} ${'region'.padEnd(9)} ${'motion px'.padStart(9)} ${'ours mean'.padStart(9)} ${'ours max'.padStart(8)} ${'pixi mean'.padStart(9)} ${'pixi max'.padStart(8)} ${'.z wrong'.padStart(8)} ${'.w err'.padStart(8)}`,
+        );
         for (const row of cases)
             for (const region of ['plane', 'backdrop']) {
                 const r = row[region];
                 if (!r) continue;
                 const motionPixels = Math.hypot(r.expected[0] * 0.5 * size[0], r.expected[1] * 0.5 * size[1]);
                 console.log(
-                    `  ${row.name.padEnd(24)} ${region.padEnd(9)} ${fmt(motionPixels, 2)} ${fmt(r.ours.mean)} ${fmt(r.ours.max)} ${fmt(r.pixi.mean)} ${fmt(r.pixi.max)}   (${r.ours.pixels} px)`,
+                    `  ${row.name.padEnd(24)} ${region.padEnd(9)} ${fmt(motionPixels, 2)} ${fmt(r.ours.mean)} ${fmt(r.ours.max)} ${fmt(r.pixi.mean)} ${fmt(r.pixi.max)} ${String(r.ours.wrongFlags).padStart(8)} ${fmt(r.ours.depthError, 5)}   (${r.ours.pixels} px)`,
                 );
+                // .z and .w hold on every case, the known limit included (it only loses camera motion).
+                if (r.ours.wrongFlags !== 0) failures.push(`${row.name} / ${region}: ${r.ours.wrongFlags} pixel(s) with the wrong .z flag`);
+                if (!(r.ours.depthError <= DEPTH_EXACT)) failures.push(`${row.name} / ${region}: .w relative error ${r.ours.depthError} (bar ${DEPTH_EXACT})`);
                 // pixi-3d's camera history is per render (docs/PIXI.md): reported, not a bar.
                 if (KNOWN_LIMITS.has(row.name)) continue;
                 if (!(r.ours.pixels > 0)) failures.push(`${row.name} / ${region}: no pixels measured`);

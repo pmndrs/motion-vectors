@@ -18,7 +18,7 @@ import {
 } from '@pixi/3d';
 import { velocityOutput } from '@pixi/3d/extras';
 import { Application, RenderTexture, type WebGPURenderer } from 'pixi.js';
-import { MotionVectors, motionOutput } from '@pmndrs/motion-vectors/pixi';
+import { MotionFlag, MotionVectors, motionOutput } from '@pmndrs/motion-vectors/pixi';
 
 /**
  * pixi-3d's own `velocityOutput` (left of the divider) next to this package's
@@ -293,13 +293,19 @@ function check(): void {
     // 28 px motion reads ~0.017 px of pure rounding (for pixi-3d's own velocity too).
     const f16 = (Math as unknown as { f16round?: (x: number) => number }).f16round ?? ((x: number) => x);
 
-    /** Max / mean endpoint error (render pixels) of `ours` against an expected NDC delta over a pixel rect. */
+    /**
+     * Max / mean endpoint error (render pixels) of `ours` against an expected NDC
+     * delta over a pixel rect; with `contract`, also the `.z` flags that differ
+     * from the expected one and the mean relative `.w` error against the expected
+     * previous depth (CONTRACT.md).
+     */
     function measure(
         data: Float32Array,
         exact: [number, number],
         inside: (x: number, y: number) => boolean,
         scale: [number, number] = [1, 1],
-    ): { pixels: number; max: number; mean: number; value: [number, number] } {
+        contract?: { flag: number; depth: number },
+    ): { pixels: number; max: number; mean: number; value: [number, number]; wrongFlags?: number; depthError?: number } {
         // `scale` maps the stored value to NDC (pixi-3d stores UV), so round in the stored units.
         const expected: [number, number] = [f16(exact[0] * scale[0]) / scale[0], f16(exact[1] * scale[1]) / scale[1]];
         let pixels = 0;
@@ -307,6 +313,9 @@ function check(): void {
         let sum = 0;
         let sx = 0;
         let sy = 0;
+        let wrongFlags = 0;
+        let depthSum = 0;
+        const depth = contract ? f16(contract.depth) : 0;
         for (let y = 0; y < height; y++)
             for (let x = 0; x < width; x++) {
                 if (!inside(x, y)) continue;
@@ -319,8 +328,13 @@ function check(): void {
                 sx += data[o];
                 sy += data[o + 1];
                 if (error > max) max = error;
+                if (contract) {
+                    if (Math.round(data[o + 2]) !== contract.flag) wrongFlags++;
+                    depthSum += depth > 0 ? Math.abs(data[o + 3] - depth) / depth : Math.abs(data[o + 3]);
+                }
             }
-        return { pixels, max, mean: pixels ? sum / pixels : 0, value: [sx / Math.max(pixels, 1), sy / Math.max(pixels, 1)] };
+        const result = { pixels, max, mean: pixels ? sum / pixels : 0, value: [sx / Math.max(pixels, 1), sy / Math.max(pixels, 1)] as [number, number] };
+        return contract ? { ...result, wrongFlags, depthError: pixels ? depthSum / pixels : 0 } : result;
     }
 
     async function runCase(name: string, previous: CheckState, current: CheckState) {
@@ -356,10 +370,18 @@ function check(): void {
             theirsNdc[i] = theirsData.data[i] / 0.5;
             theirsNdc[i + 1] = theirsData.data[i + 1] / -0.5;
         }
+        // The contract's .z/.w: the tracked plane is exact (no previous position after a
+        // hidden frame), the untracked backdrop camera-only; the camera looks down −z, so
+        // the previous depths are the previous camera's z (plane at 0, backdrop at −5).
+        const planeContract = previous.visible === false ? { flag: MotionFlag.NoPrevious, depth: 0 } : { flag: MotionFlag.Exact, depth: previous.camera[2] };
+        const backdropContract = { flag: MotionFlag.CameraOnly, depth: previous.camera[2] + 5 };
         return {
             name,
-            plane: current.visible === false ? null : { expected: planeExpected, ours: measure(oursData.data, planeExpected, onPlane), pixi: measure(theirsNdc, planeExpected, onPlane, PIXI_UV) },
-            backdrop: { expected: backdropExpected, ours: measure(oursData.data, backdropExpected, offPlane), pixi: measure(theirsNdc, backdropExpected, offPlane, PIXI_UV) },
+            plane:
+                current.visible === false
+                    ? null
+                    : { expected: planeExpected, ours: measure(oursData.data, planeExpected, onPlane, [1, 1], planeContract), pixi: measure(theirsNdc, planeExpected, onPlane, PIXI_UV) },
+            backdrop: { expected: backdropExpected, ours: measure(oursData.data, backdropExpected, offPlane, [1, 1], backdropContract), pixi: measure(theirsNdc, backdropExpected, offPlane, PIXI_UV) },
         };
     }
 

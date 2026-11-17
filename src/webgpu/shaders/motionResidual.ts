@@ -9,7 +9,7 @@
  * `velocity` convention (NDC delta, current − previous).
  *
  * Occlusion: a candidate is only scored where the previous linear depth at its
- * previous position matches the static-scene expectation (camera motion's .z)
+ * previous position matches the static-scene expectation (camera motion's .w)
  * within a relative tolerance. That expectation is exact for static geometry
  * and close for objects whose depth changes slowly; fast motion along the view
  * axis drops out as "no valid candidate" (counted, not scored).
@@ -20,7 +20,7 @@
  * pixels no candidate could score, the pixel total, the count of unscored
  * pixels whose first motion candidate comes from off-screen (content entering
  * the frame: not evidence of a cut), the count of background pixels (camera
- * motion's w = 0: no surface) and of those the unscored ones. The same pass with the
+ * motion's flag: no surface) and of those the unscored ones. The same pass with the
  * depth test off and `previous` = a reference image measures |current − ref|.
  */
 export const RESIDUAL_FIXED_POINT = 1024;
@@ -97,7 +97,7 @@ fn readMotion(k : u32, uv : vec2f) -> vec2f {
 
 fn depthValid(uv : vec2f, prevUV : vec2f) -> bool {
     if ((R.flags & 1u) == 0u) { return true; }
-    let expected = textureLoad(cameraMotion, texel(uv, R.depthSize), 0).z;
+    let expected = textureLoad(cameraMotion, texel(uv, R.depthSize), 0).w;
     let prevDepth = textureLoad(previousDepth, texel(prevUV, R.depthSize), 0).r;
     return expected > 0.0 && abs(prevDepth - expected) <= R.depthTolerance * expected;
 }
@@ -157,7 +157,7 @@ fn main(
                 if (best <= 0.5 * R.threshold) { atomicAdd(&partial[base + 4u], 1u); }
             }
         }
-        let background = textureLoad(cameraMotion, texel(uv, R.depthSize), 0).w <= 0.0;
+        let background = round(textureLoad(cameraMotion, texel(uv, R.depthSize), 0).z) == 0.0;
         if (background) { atomicAdd(&partial[CANDIDATES * FIELDS + 3u], 1u); }
         if (bestIndex == CANDIDATES) {
             atomicAdd(&partial[CANDIDATES * FIELDS], 1u);

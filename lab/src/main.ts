@@ -268,7 +268,7 @@ async function run(request: LabRequest): Promise<{ frames: FrameRecord[]; object
             }
             velocityProjection.copy(unjittered);
             const view4 = camera.matrixWorldInverse;
-            oracle.beginFrame(new THREE.Matrix4().multiplyMatrices(unjittered, view4), frame / FPS);
+            oracle.beginFrame(new THREE.Matrix4().multiplyMatrices(unjittered, view4), frame / FPS, view4);
             if (driven) motionVectors.beginFrame();
             if (frame % rendersPerTick === 0) {
                 nodeFrame!.update();

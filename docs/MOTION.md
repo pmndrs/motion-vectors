@@ -396,6 +396,18 @@ graph's vertex cost; scenes without deformation read within noise. The
 laptop GPU idles between the lab's read-back frames, so absolute times are
 low-clock numbers; compare only within one run.
 
+### `.z` and `.w` (2026-11-17)
+
+The node writes the full contract texel (CONTRACT.md): the flag in `.z` and
+the previous linear depth in `.w`. The oracle now writes its own previous depth
+(`.w`) and packs its marker and object id into `.z`, and the comparison scores
+both channels (`motionCompare.ts`). On Metal, every node row above reads
+0.00000 relative `.w` error and no wrong flag, first frames included. The one
+exception is the re-entering ball: 327 pixels on its first frames back read
+4 (no previous position) where the oracle knows where it was. That is the
+honest answer for history kept per draw, and the bars exempt it. Motion from
+depth reads flag 2 and the exact previous depth on static geometry.
+
 ## 9. What's worth building next
 
 The agreed spec and phased plan, with decision gates and the intended split

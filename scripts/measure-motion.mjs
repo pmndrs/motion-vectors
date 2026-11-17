@@ -86,6 +86,24 @@ function expectExact(label, summary, candidate) {
         failures.push(`${label}: ${COMPARE[candidate]} error ${error ?? 'n/a'} px (bar ${EXACT_PIXELS} px)`);
 }
 
+/** Mean relative `.w` error a conforming source stays under: one f16 step (2^-11) of rounding, twice. */
+const DEPTH_EXACT = 2 ** -10;
+/**
+ * Records the contract's `.z`/`.w` bars for --check: no covered pixel with a
+ * flag that contradicts the oracle, and `.w` within DEPTH_EXACT of the oracle's
+ * previous depth where the candidate claims a previous position.
+ * @param {string} label - What is checked
+ * @param {ReturnType<typeof compareSummary>} summary - An object's comparison
+ * @param {number} candidate - 1 the `velocity` slot, 2 camera motion from depth
+ * @param {{ flags?: boolean }} [options] - `flags: false` skips the flag bar (honest no-previous flags the oracle doesn't share)
+ */
+function expectContract(label, summary, candidate, { flags = true } = {}) {
+    const c = summary?.candidates[candidate];
+    if (!c) return failures.push(`${label}: ${COMPARE[candidate]} not measured`);
+    if (flags && c.wrongFlags !== 0) failures.push(`${label}: ${COMPARE[candidate]} ${c.wrongFlags} pixel(s) with a wrong .z flag`);
+    if (c.depthError === null || !(c.depthError <= DEPTH_EXACT)) failures.push(`${label}: ${COMPARE[candidate]} .w error ${c.depthError ?? 'n/a'} (bar ${DEPTH_EXACT})`);
+}
+
 //* Summaries
 const fmt = (value, digits = 3, pad = 8) => (value === null || value === undefined || !Number.isFinite(value) ? '—' : value.toFixed(digits)).padStart(pad);
 const pct = (value, digits = 1, pad = 7) => fmt(value === null ? null : 100 * value, digits, pad);
@@ -96,19 +114,27 @@ const isMotion = (segment) => !/^(still|hold)/.test(segment);
  * @returns {{ valid: number, motion: number|null, candidates: { name: string, error: number|null, over025: number|null, over1: number|null }[] } | null}
  */
 function compareSummary(frames, object) {
-    const rows = frames.map((frame) => frame.compare[object]).filter((row) => row && row.valid > 0);
+    const covered = frames.map((frame) => frame.compare[object]).filter(Boolean);
+    const rows = covered.filter((row) => row.valid > 0);
     const pixels = rows.reduce((total, row) => total + row.valid, 0);
     if (!pixels) return null;
     const weighted = (pick) => rows.reduce((total, row) => total + pick(row) * row.valid, 0) / pixels;
+    const sum = (pick) => covered.reduce((total, row) => total + pick(row), 0);
     return {
         valid: pixels / frames.length,
         motion: weighted((row) => row.meanMotion),
-        candidates: COMPARE.map((name, k) => ({
-            name,
-            error: weighted((row) => row.candidates[k].meanError),
-            over025: weighted((row) => row.candidates[k].over025),
-            over1: weighted((row) => row.candidates[k].over1),
-        })),
+        candidates: COMPARE.map((name, k) => {
+            const depthPixels = sum((row) => row.candidates[k].depthPixels);
+            return {
+                name,
+                error: weighted((row) => row.candidates[k].meanError),
+                over025: weighted((row) => row.candidates[k].over025),
+                over1: weighted((row) => row.candidates[k].over1),
+                // .z/.w (CONTRACT.md): flags over every covered pixel, the first frame's too.
+                wrongFlags: sum((row) => row.candidates[k].wrongFlags),
+                depthError: depthPixels ? sum((row) => row.candidates[k].depthError * row.candidates[k].depthPixels) / depthPixels : null,
+            };
+        }),
     };
 }
 
@@ -125,12 +151,12 @@ function auditSummary(frames) {
     }));
 }
 
-const COMPARE_HEADER = '  object/segment          px moved   zero err   three err  >0.25px  >1px   camera err  >0.25px';
+const COMPARE_HEADER = '  object/segment          px moved   zero err   three err  >0.25px  >1px   camera err  >0.25px  .z wrong   .w err';
 function printCompare(label, summary) {
     if (!summary) return console.log(`  ${label.padEnd(22)}  (not visible)`);
     const [zero, three, camera] = summary.candidates;
     console.log(
-        `  ${label.padEnd(22)} ${fmt(summary.motion)}  ${fmt(zero.error)}   ${fmt(three.error)}  ${pct(three.over025)} ${pct(three.over1, 1, 5)}  ${fmt(camera.error)}  ${pct(camera.over025)}`,
+        `  ${label.padEnd(22)} ${fmt(summary.motion)}  ${fmt(zero.error)}   ${fmt(three.error)}  ${pct(three.over025)} ${pct(three.over1, 1, 5)}  ${fmt(camera.error)}  ${pct(camera.over025)} ${String(camera.wrongFlags).padStart(9)} ${fmt(camera.depthError, 5)}`,
     );
 }
 function printAudit(label, rows) {
@@ -161,6 +187,9 @@ async function oracleCheck(run, screenshot) {
     expectExact('oracle: camera motion, static', summary.cameraStatic, 2);
     expectExact('oracle: camera motion, props', summary.cameraProps, 1);
     expectExact('oracle: moving props', summary.objectProps, 1);
+    // Motion from depth fills the contract's .z/.w: camera-only and exact previous depth on static geometry.
+    expectContract('oracle: camera motion, static', summary.cameraStatic, 2);
+    expectContract('oracle: camera motion, props', summary.cameraProps, 2);
     await run({ scene: 'track', end: 60, view: 'audit-motion', heatCandidate: 3 });
     await screenshot('oracle-track-f60');
     return summary;
@@ -244,14 +273,17 @@ async function node(run) {
     // dolly segments (several renders per tick still change history there).
     const quick = cli.check === true;
     const threeRun = (request) => (quick ? Promise.resolve(null) : run(request));
-    const header = '  scene/object/segment              px moved   three err   node err  >0.25px  >1px';
+    const header = '  scene/object/segment              px moved   three err   node err  >0.25px  >1px  .z wrong   .w err';
     const row = (label, three, ours) => {
-        summary[label] = { three: three?.candidates[1].error ?? null, node: ours?.candidates[1].error ?? null, motion: ours?.motion ?? null };
+        const c = ours?.candidates[1];
+        summary[label] = { three: three?.candidates[1].error ?? null, node: c?.error ?? null, motion: ours?.motion ?? null, wrongFlags: c?.wrongFlags ?? null, depthError: c?.depthError ?? null };
         if (!ours) return console.log(`  ${label.padEnd(32)}  (not visible)`);
         console.log(
-            `  ${label.padEnd(32)} ${fmt(ours.motion)}  ${fmt(three?.candidates[1].error)}   ${fmt(ours.candidates[1].error)}  ${pct(ours.candidates[1].over025)} ${pct(ours.candidates[1].over1, 1, 5)}`,
+            `  ${label.padEnd(32)} ${fmt(ours.motion)}  ${fmt(three?.candidates[1].error)}   ${fmt(c.error)}  ${pct(c.over025)} ${pct(c.over1, 1, 5)} ${String(c.wrongFlags).padStart(9)} ${fmt(c.depthError, 5)}`,
         );
         expectExact(`node: ${label}`, ours, 1);
+        // The re-entering ball is honestly flagged "no previous" on its first frame back; the oracle knows where it was.
+        expectContract(`node: ${label}`, ours, 1, { flags: label !== 'deformers reentry' });
     };
     console.log(header);
     for (const scene of ['deformers', 'cases', 'water']) {

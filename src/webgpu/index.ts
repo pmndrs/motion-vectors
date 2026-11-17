@@ -13,7 +13,8 @@ export type {
     ResidualRequest,
     ResidualStats,
 } from './MotionAnalyzer.js';
-export { COMPARE_OBJECTS, ORACLE_NO_PREVIOUS, ORACLE_VALID } from './shaders/motionCompare.js';
+export { COMPARE_OBJECTS, ORACLE_NO_PREVIOUS, ORACLE_VALID, oracleCode } from './shaders/motionCompare.js';
+export { MotionFlag } from '../flags.js';
 export { createDeviceTextureAllocator } from './textures.js';
 export type { MotionTexture, MotionTextureDescriptor, MotionTextureFormat, TextureAllocator } from './textures.js';
 export { MOVING_PIXELS, RESIDUAL_DEBUG_CLASSIFY, RESIDUAL_DEBUG_HEAT, RESIDUAL_DEBUG_MOTION } from './shaders/motionResidual.js';
