@@ -50,6 +50,35 @@ renderer.setAnimationLoop(() => {
   outside a `Fn`, textures or storage buffers that change per frame
   (docs/MOTION.md §8).
 
+### Motion from depth and cut detection
+
+`MotionFromDepthPass` runs camera motion from depth and the GPU cut detector
+(below) from a three depth texture and camera, and publishes both as three
+textures. Use it for a reset signal, or as a velocity source where a scene has
+no velocity output (static geometry only: moving objects read zero, flagged).
+
+```ts
+import { MotionFromDepthPass } from '@pmndrs/motion-vectors/three';
+
+const depthMotion = new MotionFromDepthPass(renderer);
+await depthMotion.init();
+
+// Per frame, after rendering into `target` (which has a depthTexture), while the
+// camera still holds the projection it rendered with:
+depthMotion.update({
+    depth: target.depthTexture,
+    camera,
+    projectionMatrix: unjittered, // only when jittering
+    motions: [target.textures[1]], // the velocity output, optional
+});
+// texture(depthMotion.motion): camera motion in the contract format
+// depthMotion.cutFlag: 1×1, .r = 1 resets history this frame
+```
+
+`encode(encoder, frame)` does the same into your own command encoder.
+Reversed depth works; a logarithmic depth buffer can't be unprojected and is
+refused.
+
 ## Cut detection (raw WebGPU)
 
 `CutDetector` tells a temporal pass when its history stopped being valid: a
@@ -77,9 +106,8 @@ engine's velocity) maps onto a matching previous depth. Lighting changes,
 fades and flashes don't touch depth, so they never fire; on the lab's 14-event
 cut timeline it fires on every cut whose history is really gone and on nothing
 else ([docs/MOTION.md](docs/MOTION.md) §9). It needs depth: inputs without it
-fall back to the luma histogram (`jensenShannon`, `earthMovers`). Both passes
-take an allocator, so a three app gets three textures
-(`createThreeTextureAllocator`). `cuts.read()` reads the verdict back if you
+fall back to the luma histogram (`jensenShannon`, `earthMovers`). A three app
+uses `MotionFromDepthPass` (above). `cuts.read()` reads the verdict back if you
 reset on the CPU instead.
 
 ## pixi-3d (experimental)

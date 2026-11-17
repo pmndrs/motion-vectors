@@ -2,9 +2,8 @@ import * as THREE from 'three/webgpu';
 import { mrt, output, texture, velocity } from 'three/tsl';
 
 import { earthMovers, jensenShannon } from '../../src/index.js';
-import { createThreeTextureAllocator, getGPUTexture, MotionVectors } from '../../src/three/index.js';
+import { createThreeTextureAllocator, getGPUTexture, MotionFromDepthPass, MotionVectors } from '../../src/three/index.js';
 import {
-    CutDetector,
     type CutResult,
     MotionAnalyzer,
     RESIDUAL_DEBUG_CLASSIFY,
@@ -108,7 +107,7 @@ interface FrameRecord {
      * `entering` the part of it that came from off-screen.
      */
     cutDepth: ResidualStats | null;
-    /** The GPU cut detector's verdict (`CutDetector`, candidates zero, camera and the engine's velocity). */
+    /** The GPU cut verdict (`MotionFromDepthPass` → `CutDetector`; candidates zero, camera and the engine's velocity). */
     cutGpu: CutResult | null;
     /** GPU milliseconds of motion from depth and of the cut detector (where timestamp queries exist). */
     cameraMotionMs?: number;
@@ -148,11 +147,13 @@ internals._animation.stop();
 const camera = new THREE.PerspectiveCamera(50, 16 / 9, 0.1, 200);
 const analyzer = new MotionAnalyzer(device, createThreeTextureAllocator(renderer));
 await analyzer.init();
-// The GPU cut detector on the analyzer's motion from depth (the product a consumer runs).
-const cutDetector = new CutDetector(device);
-await cutDetector.init();
+// The three helper a consumer runs: its own motion from depth + the GPU cut
+// detector, fed from three's depth and camera. Its counts are checked against
+// the analyzer's audit (same test, the analyzer's own motion from depth).
+const depthMotion = new MotionFromDepthPass(renderer);
+await depthMotion.init();
 
-// Timestamps around motion from depth (0, 1) and the cut detector (2, 3), where the device has them.
+// Timestamps around the helper's motion from depth (0, 1) and cut detector (2, 3), where the device has them.
 const passTimer = device.features.has('timestamp-query')
     ? {
           set: device.createQuerySet({ type: 'timestamp', count: 4 }),
@@ -272,6 +273,7 @@ async function run(request: LabRequest): Promise<{ frames: FrameRecord[]; object
     configure(width, height);
     lab.select?.(request.objects);
     analyzer.reset();
+    depthMotion.reset();
     oracle.reset();
     motionVectors.reset();
     const driven = request.driven !== false;
@@ -319,7 +321,7 @@ async function run(request: LabRequest): Promise<{ frames: FrameRecord[]; object
                 viewProjection: new THREE.Matrix4().multiplyMatrices(unjittered, view4).elements,
                 inverseViewProjectionJittered: new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, view4).invert().elements,
                 view: view4.elements,
-            }, passWrites(0));
+            });
             analyzer.encodeHistogram(early, 0, gpu(color));
             device.queue.submit([early.finish()]);
 
@@ -367,7 +369,13 @@ async function run(request: LabRequest): Promise<{ frames: FrameRecord[]; object
                     debug: cutView ? { mode: RESIDUAL_DEBUG_CLASSIFY } : undefined,
                 });
             }
-            cutDetector.encode(late, analyzer.fromDepth, { motions: [gpu(engine)], timestampWrites: passWrites(2) });
+            depthMotion.encode(late, {
+                depth: target!.depthTexture!,
+                camera,
+                projectionMatrix: unjittered,
+                motions: [engine],
+                timestampWrites: { motion: passWrites(0), cut: passWrites(2) },
+            });
             if (passTimer) {
                 late.resolveQuerySet(passTimer.set, 0, 4, passTimer.resolve, 0);
                 late.copyBufferToBuffer(passTimer.resolve, 0, passTimer.read, 0, 32);
@@ -379,7 +387,7 @@ async function run(request: LabRequest): Promise<{ frames: FrameRecord[]; object
 
             if (!measured) continue;
             const stats = await analyzer.readStats();
-            const cutGpu = await cutDetector.read();
+            const cutGpu = await depthMotion.readCut();
             const passTimes = await readPassTimes();
             const compare: Record<string, CompareObjectStats> = {};
             for (const [id, objectStats] of (stats.compare ?? []).entries())

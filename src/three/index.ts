@@ -4,4 +4,5 @@
  */
 export { MotionFlag } from '../flags.js';
 export { MotionVectors } from './MotionVectors.js';
+export { cameraMatrices, type MotionFromDepthFrame, MotionFromDepthPass, type MotionFromDepthPassOptions } from './MotionFromDepthPass.js';
 export { createThreeTextureAllocator, getGPUTexture } from './textures.js';

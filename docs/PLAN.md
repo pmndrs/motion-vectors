@@ -107,7 +107,7 @@ Requirements. Each one maps to a measured failure (MOTION.md) and a lab test (§
 
 | Product | Spec |
 |---|---|
-| Motion from depth | Depth + jittered inverse view-projection + current/previous unjittered view-projection → the §3.1 contract. Exact for static geometry, zero for object motion (flagged). Works for every engine that has depth. Built: `MotionFromDepth` (`cameraMotion.ts`), ~23 µs at 1280×720. |
+| Motion from depth | Depth + jittered inverse view-projection + current/previous unjittered view-projection → the §3.1 contract. Exact for static geometry, zero for object motion (flagged). Works for every engine that has depth. Built: `MotionFromDepth` (`cameraMotion.ts`), ~23 µs at 1280×720; three apps feed it through `MotionFromDepthPass` (`/three`). |
 | Cut detection | **Changed in Phase 1:** keyed on the depth-consistency share (surface pixels where no motion candidate lands on a matching previous depth; background excluded), **entirely on the GPU** (no readback), writing a 1×1 flag a consumer reads in the same frame to reset its history. On the 14-event cut timeline (MOTION.md §7, "side by side") it gets 13 right at 0.2: cuts read 0.30–1.0, every look-alike (fade, flash, light steps, pans, whip pan, occluder sweep) at most 0.16; its one miss is a cut whose history stays valid. The luma histogram (EMD) gets 8 and is the fallback for depth-less inputs only: it misses in-scene cuts (0.34–0.36) and fires on flashes and light steps (4.2–14.2). Built (2026-11-17): `CutDetector` (`cutDetection.ts`), one compute pass and a 1×1 `rgba16float` flag, counts identical to the audit's on every lab frame, ~30 µs at 1280×720 (MOTION.md §9). The histogram is `lumaHistogram.ts` with a CPU comparison. |
 | Warping error | A reference-free temporal-stability metric with an occlusion mask, as a measurement export for benches. Not a runtime feature. Built: `motionResidual.ts`. |
 | Motion audit | Score candidate motion fields against the image (zero / engine / depth-derived / future flow). The lab's oracle; also usable by consumers to validate an engine. Built. |
@@ -150,7 +150,7 @@ file) rather than writing its own reductions.
 
 | Adapter | First version |
 |---|---|
-| `/three` | The §3.2 node, plus helpers to allocate published textures as three textures. |
+| `/three` | The §3.2 node; `MotionFromDepthPass` (motion from depth + cut detection from a three depth texture and camera); helpers to allocate published textures as three textures. |
 | `/webgpu` | No engine: motion from depth plus the contract; the app supplies matrices. |
 | `/babylon` | Babylon has its own velocity; run the same audit before wrapping or fixing anything. |
 | `/pixi` | 2D usually has no depth, so the first version is app-supplied motion in the contract format. Optical flow is the long-term answer (D3). |
@@ -275,9 +275,10 @@ outside a Fn, per-frame textures and storage (R7/R8).
 - ~~Cut detection on the GPU with the 1×1 flag.~~ Done (MOTION.md §9): no
   false positives, every cut whose history is gone fires, 29.8 µs median. The
   reduction is two counters, so it doesn't need the downsampler (§3.6).
-- Motion from depth packaged as a drop-in velocity source. `MotionFromDepth`
-  is its own class now (22.5 µs median); left: a three helper that feeds it
-  from a `WebGPURenderer` without the lab's plumbing.
+- ~~Motion from depth packaged as a drop-in velocity source.~~ Done:
+  `MotionFromDepth` (22.5 µs median), and `MotionFromDepthPass` feeds it and
+  the cut detector from a three depth texture and camera (MOTION.md §9). The
+  lab runs the helper, so every lab run checks it against the audit.
 - Warping error exported as a measurement tool.
 
 **Exit:** cut cases pass with zero false positives; every cost measured.
@@ -343,6 +344,7 @@ ships from there.
 | 2026-11-15 | Cut detectors A/B'd on 14 events: depth share (surface only, background excluded) 13/14 at 0.2, histogram 8/14 | Agreed 2026-11-17: depth consistency is the default |
 | 2026-11-15 | pixi-3d adapter on the public API (material field per tracked mesh); engine-side asks drafted in PIXI.md | Built, experimental; asks filed upstream as pixijs/3d#50–54 |
 | 2026-11-17 | Cut detection ships as `CutDetector`: GPU-only, 1×1 flag, own two-counter reduction (no downsampler) | Done (MOTION.md §9) |
+| 2026-11-17 | three apps get motion from depth and cuts through one `/three` class, `MotionFromDepthPass`; the lab runs it and every run bars it against the audit | Done (MOTION.md §9) |
 | 2026-11-17 | `.z` = `MotionFlag` (0 no surface, 1 exact, 2 camera only, 3 rigid, 4 no previous); `.w` = previous view-space linear depth, 0 when not available | Done (CONTRACT.md) |
 | 2026-11-14 | D1: `positionNode` previous is feasible (graph rebuilt with substituted leaves) | Done (MOTION.md §8) |
 | — | P: publish 0.x | Pending (review by 2026-12-15, proposed) |

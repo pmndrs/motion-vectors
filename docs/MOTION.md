@@ -456,6 +456,34 @@ or weight it to zero for a frame) and whether to pass its own velocity as a
 candidate. Without the velocity, objects moving along the view axis read as
 inconsistent; the cut timeline has none, so that cost isn't measured yet.
 
+### The three helper (2026-11-17)
+
+`MotionFromDepthPass` (`src/three/MotionFromDepthPass.ts`) is what a three app
+runs: it resolves three's depth and velocity textures to `GPUTexture`s, builds
+the matrices from the camera (`cameraMatrices`: the rendered, possibly jittered
+projection to unproject, the unjittered one for both endpoints, the clear depth
+for the background), and encodes motion from depth, the cut detector and
+`endFrame()` in that order. Its textures are three `StorageTexture`s.
+
+The lab now gets its GPU verdict from the helper instead of wiring
+`CutDetector` to the analyzer's `MotionFromDepth`. The helper keeps its own
+motion from depth, so its counts are an independent check on the matrices,
+and every lab run (not only `cuts`) bars them against the audit's: any pixel
+apart fails `--check`. Under that bar:
+
+| Run | Result |
+|---|---|
+| `oracle,cases,jitter,node,cuts`, Metal, 1280×720 | every bar holds, 0 px apart on every run, jitter included |
+| The same, SwiftShader, 640×360 (CI's setup) | every bar holds, 0 px apart on every run |
+| Sabotage: the jittered projection passed as unjittered (jitter run) | fails, up to 5,848 px apart |
+
+GPU time on Metal, 1280×720, median over the 569 cut-timeline frames: motion
+from depth 22.6 µs (22.5 µs before), cut detector 33.5 µs (29.8 µs before).
+The detector's shader didn't change; in the new layout motion from depth runs
+right before it in the same encoder, where before it ran in an earlier submit.
+Whether those 3–4 µs come from that layout or from the GPU not being quiet
+(means and maxima were higher in this run) isn't separated.
+
 ## 10. What's worth building next
 
 The agreed spec and phased plan, with decision gates and the intended split
@@ -472,8 +500,9 @@ ships.
    reading that flag in its accumulate pass, behind an option (Phase 4). Its
    own disocclusion pass may already hold most of this signal.
 2. **A depth-only motion mode** (`velocity` omitted → camera motion from depth)
-   for static scenes. Measure the saved MRT and vertex cost, and document the
-   object-motion limit.
+   for static scenes. `MotionFromDepthPass` now supplies that motion for three
+   (§9); what's left is the consumer's option, the saved MRT and vertex cost
+   measured, and the object-motion limit documented.
 3. **Warping error in the bench tooling**, as a motion counterpart to the
    still-scene convergence meters, so regressions under motion stop depending
    on eyeballing.
