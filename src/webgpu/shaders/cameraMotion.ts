@@ -1,3 +1,5 @@
+import { MotionFlag } from '../../flags.js';
+
 /**
  * Camera motion from depth (EXPERIMENTAL, motion lab).
  *
@@ -9,12 +11,15 @@
  * render target. Moving objects are wrong by construction (their own motion is
  * absent); measuring how wrong is part of the experiment.
  *
- * Output `motion` (rgba16float): xy = NDC delta, current − previous (three's
- * `velocity` convention, so it can be fed to the upscaler unchanged);
- * z = the point's linear depth in the previous camera (−1 when the point was
- * behind it); w = linear depth now, or 0 where the depth is the clear value
- * (`params.x`: background, no surface). `linearDepth` (r32float) keeps this
- * frame's linear depth for the next frame's occlusion test.
+ * Output `motion` (rgba16float) is the motion contract (CONTRACT.md): xy = NDC
+ * delta, current − previous (three's `velocity` convention, so it can be fed
+ * to the upscaler unchanged); z = the flag: camera-only (2) on surfaces, no
+ * previous position (4) behind the previous camera or without a previous frame
+ * (`params.y` = 0), no surface (0) where the depth is the clear value
+ * (`params.x`); w = the point's linear depth in the previous camera, 0 with no
+ * previous position. On no-surface pixels xy and w describe the far plane's
+ * point, so the warp residual can still score the sky. `linearDepth`
+ * (r32float) keeps this frame's linear depth for the next frame's occlusion test.
  */
 export const CAMERA_MOTION_SHADER = /* wgsl */ `
 struct MotionConstants {
@@ -46,11 +51,13 @@ fn main(@builtin(global_invocation_id) gid : vec3u) {
     let prev = M.prevViewProj * world;
     let linearDepth = -dot(M.viewZRow, world);
     let prevLinearDepth = -dot(M.prevViewZRow, world);
-    // A point behind the previous camera has no previous screen position.
-    let behind = prev.w <= 1e-6;
-    let velocity = select(cur.xy / cur.w - prev.xy / prev.w, vec2f(0.0), behind);
+    // A point behind the previous camera has no previous screen position, and
+    // neither has anything on the first frame (previous = current there).
+    let none = prev.w <= 1e-6 || M.params.y < 0.5;
+    let velocity = select(cur.xy / cur.w - prev.xy / prev.w, vec2f(0.0), none);
     let background = d == M.params.x;
-    textureStore(motionOut, pixel, vec4f(velocity, select(prevLinearDepth, -1.0, behind), select(linearDepth, 0.0, background)));
+    let flag = select(select(${MotionFlag.CameraOnly}.0, ${MotionFlag.NoPrevious}.0, none), ${MotionFlag.NoSurface}.0, background);
+    textureStore(motionOut, pixel, vec4f(velocity, flag, select(prevLinearDepth, 0.0, none)));
     textureStore(linearDepthOut, pixel, vec4f(linearDepth, 0.0, 0.0, 0.0));
 }
 `;

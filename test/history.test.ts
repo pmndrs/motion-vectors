@@ -45,6 +45,22 @@ describe('FrameHistory', () => {
         expect(history.before(key, 2, 20, 1)).toBe(20);
     });
 
+    it('knows when the value it hands out is a real previous one', () => {
+        const history = new FrameHistory<number>((v) => v);
+        const key = box();
+        expect(history.known(key)).toBe(false);
+        draw(history, key, 1, 10);
+        expect(history.known(key)).toBe(false); // first draw: the current value stands in
+        draw(history, key, 2, 20);
+        expect(history.known(key)).toBe(true);
+        draw(history, key, 2, 20); // a second draw in the frame keeps it
+        expect(history.known(key)).toBe(true);
+        draw(history, key, 4, 40); // not drawn in frame 3
+        expect(history.known(key)).toBe(false);
+        history.before(key, 5, 50, 1); // reset
+        expect(history.known(key)).toBe(false);
+    });
+
     it('clones, so live objects never alias history', () => {
         const history = new FrameHistory<number[]>((v) => [...v]);
         const key = box();

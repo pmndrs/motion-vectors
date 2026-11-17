@@ -1,5 +1,6 @@
 import type { BaseMaterial3D, Mesh3D, SceneOutput, ShaderBit } from '@pixi/3d';
 
+import { MotionFlag } from '../flags.js';
 import { FrameHistory } from '../shared/history.js';
 
 /**
@@ -23,6 +24,12 @@ import { FrameHistory } from '../shared/history.js';
  * mesh, as the contract asks of a producer that can't compute a deformation's
  * previous position. Blended surfaces write nothing, as in pixi-3d.
  *
+ * `.z` is the contract's flag: exact on tracked meshes (rigid on skinned or
+ * morphing ones), camera-only on everything else, no previous position where
+ * a tracked mesh wasn't drawn last frame or after {@link MotionVectors.reset}.
+ * `.w` is the previous linear depth under a perspective camera, and 0 (not
+ * available) under an orthographic one: pixi-3d keeps no previous view matrix.
+ *
  * pixi-3d keeps one previous view-projection per camera and compares each
  * render with the camera's own previous render, so a view drawn twice in a
  * frame reads no camera motion the second time (the same limit as its own
@@ -32,14 +39,15 @@ import { FrameHistory } from '../shared/history.js';
 /** Private variables the material bit sets and the output bit reads, declared once. */
 const stateBit: ShaderBit = {
     name: 'pmndrsMotionState',
-    gpu: { header: /* wgsl */ 'var<private> mvPreviousWorld : vec4<f32>;\nvar<private> mvTracked : f32 = 0.0;' },
-    gl: { header: /* glsl */ 'vec4 mvPreviousWorld;\nfloat mvTracked = 0.0;' },
+    gpu: { header: /* wgsl */ `var<private> mvPreviousWorld : vec4<f32>;\nvar<private> mvTracked : f32 = 0.0;\nvar<private> mvFlag : f32 = ${MotionFlag.CameraOnly}.0;` },
+    gl: { header: /* glsl */ `vec4 mvPreviousWorld;\nfloat mvTracked = 0.0;\nfloat mvFlag = ${MotionFlag.CameraOnly}.0;` },
 };
 
 /**
  * On a tracked mesh's material: last frame's world transform, as four columns
- * (material fields can't be matrices). Runs after the transform, so `position`
- * is the same local point the draw rasterizes.
+ * (material fields can't be matrices), and the mesh's flag (exact or rigid, or
+ * no previous position when its history is new). Runs after the transform, so
+ * `position` is the same local point the draw rasterizes.
  */
 const trackedBit: ShaderBit = {
     name: 'pmndrsMotionTracked',
@@ -50,6 +58,7 @@ const trackedBit: ShaderBit = {
             mvPreviousModel1: 'vec4<f32>',
             mvPreviousModel2: 'vec4<f32>',
             mvPreviousModel3: 'vec4<f32>',
+            mvFlag: 'f32',
         },
     },
     gpu: {
@@ -58,6 +67,7 @@ const trackedBit: ShaderBit = {
     let mvPreviousModel = mat4x4<f32>(material.mvPreviousModel0, material.mvPreviousModel1, material.mvPreviousModel2, material.mvPreviousModel3);
     mvPreviousWorld = mvPreviousModel * vec4<f32>(position.xyz, 1.0);
     mvTracked = 1.0;
+    mvFlag = material.mvFlag;
   }`,
         },
     },
@@ -67,6 +77,7 @@ const trackedBit: ShaderBit = {
     mat4 mvPreviousModel = mat4(material.mvPreviousModel0, material.mvPreviousModel1, material.mvPreviousModel2, material.mvPreviousModel3);
     mvPreviousWorld = mvPreviousModel * vec4(position.xyz, 1.0);
     mvTracked = 1.0;
+    mvFlag = material.mvFlag;
   }`,
         },
     },
@@ -74,27 +85,32 @@ const trackedBit: ShaderBit = {
 
 /**
  * The output's own bit, on every opaque draw: camera motion of the surface
- * point, or its own previous position where the material is tracked.
+ * point, or its own previous position where the material is tracked, with the
+ * flag and the previous linear depth. Under a perspective projection the
+ * previous clip `w` is the previous view depth; an orthographic one (bottom-right
+ * element 1) has none to give, so `.w` is 0 there.
  */
 const outputBit: ShaderBit = {
     name: 'pmndrsMotion',
     requires: [stateBit],
     outputs: { motion: 'vec4<f32>' },
-    interStage: { vMvCurrentClip: 'vec3<f32>', vMvPreviousClip: 'vec3<f32>' },
+    interStage: { vMvCurrentClip: 'vec3<f32>', vMvPreviousClip: 'vec3<f32>', vMvFlag: 'f32' },
     gpu: {
         vertex: {
             end: /* wgsl */ `{
     let mvWorld = select(worldPosition, mvPreviousWorld, mvTracked > 0.5);
     output.vMvCurrentClip = clipPosition.xyw;
     output.vMvPreviousClip = (camera.uPreviousViewProjectionMatrix * mvWorld).xyw;
+    output.vMvFlag = mvFlag;
   }`,
         },
         fragment: {
             end: /* wgsl */ `{
     // A point behind the previous camera has no previous position: zero (CONTRACT.md).
-    let mvValid = input.vMvPreviousClip.z > 1e-6;
+    let mvValid = input.vMvPreviousClip.z > 1e-6 && input.vMvFlag < ${MotionFlag.NoPrevious - 0.5};
     let mvDelta = input.vMvCurrentClip.xy / input.vMvCurrentClip.z - input.vMvPreviousClip.xy / max(input.vMvPreviousClip.z, 1e-6);
-    outputs.motion = vec4<f32>(select(vec2<f32>(0.0), mvDelta, mvValid), 0.0, 0.0);
+    let mvDepth = select(input.vMvPreviousClip.z, 0.0, camera.uProjectionMatrix[3][3] > 0.5);
+    outputs.motion = vec4<f32>(select(vec2<f32>(0.0), mvDelta, mvValid), select(${MotionFlag.NoPrevious}.0, round(input.vMvFlag), mvValid), select(0.0, mvDepth, mvValid));
   }`,
         },
     },
@@ -104,12 +120,15 @@ const outputBit: ShaderBit = {
     vec4 mvWorld = mvTracked > 0.5 ? mvPreviousWorld : worldPosition;
     vMvCurrentClip = gl_Position.xyw;
     vMvPreviousClip = (uPreviousViewProjectionMatrix * mvWorld).xyw;
+    vMvFlag = mvFlag;
   }`,
         },
         fragment: {
             end: /* glsl */ `{
+    bool mvValid = vMvPreviousClip.z > 1e-6 && vMvFlag < ${MotionFlag.NoPrevious - 0.5};
     vec2 mvDelta = vMvCurrentClip.xy / vMvCurrentClip.z - vMvPreviousClip.xy / max(vMvPreviousClip.z, 1e-6);
-    outputs.motion = vec4(vMvPreviousClip.z > 1e-6 ? mvDelta : vec2(0.0), 0.0, 0.0);
+    float mvDepth = uProjectionMatrix[3][3] > 0.5 ? 0.0 : vMvPreviousClip.z;
+    outputs.motion = vec4(mvValid ? mvDelta : vec2(0.0), mvValid ? floor(vMvFlag + 0.5) : ${MotionFlag.NoPrevious}.0, mvValid ? mvDepth : 0.0);
   }`,
         },
     },
@@ -117,7 +136,8 @@ const outputBit: ShaderBit = {
 
 /**
  * The scene output: list it in a pass's `requiredOutputs` and read it with
- * `graph.getSceneOutput(motionOutput)`. Cleared to zero (no surface: no motion).
+ * `graph.getSceneOutput(motionOutput)`. Cleared to zero, which reads as
+ * {@link MotionFlag.NoSurface}.
  */
 export const motionOutput: SceneOutput = {
     name: 'motion',
@@ -134,6 +154,11 @@ interface Tracked {
 function isShown(node: Mesh3D): boolean {
     for (let at: { visible: boolean; parent?: unknown } | null | undefined = node; at; at = at.parent as typeof at) if (!at.visible) return false;
     return true;
+}
+
+/** Exact for rigid meshes; rigid for skinned or morphing ones (pixi-3d keeps no previous bones or weights). */
+function deformationFlag(mesh: Mesh3D): number {
+    return mesh.skeleton !== undefined || mesh.weights !== undefined ? MotionFlag.Rigid : MotionFlag.Exact;
 }
 
 /** Writes a column-major 4×4 into the four material fields. */
@@ -177,8 +202,9 @@ export class MotionVectors {
         if (this._tracked.has(mesh)) return;
         const original = mesh.material;
         const material = original.clone({ extraBits: [trackedBit] } as never);
-        // Zero motion until the first update: previous = current.
+        // No previous position until the first update.
         writeColumns(material, mesh.getGlobalTransform().elements);
+        (material.data as Record<string, number>).mvFlag = MotionFlag.NoPrevious;
         mesh.material = material;
         this._tracked.set(mesh, { original, material });
     }
@@ -214,6 +240,7 @@ export class MotionVectors {
             // A hidden mesh isn't drawn: no capture, so it starts over at zero motion when it shows again.
             if (isShown(mesh)) this._history.after(mesh, current);
             writeColumns(entry.material, previous);
+            (entry.material.data as Record<string, number>).mvFlag = this._history.known(mesh) ? deformationFlag(mesh) : MotionFlag.NoPrevious;
         }
     }
 

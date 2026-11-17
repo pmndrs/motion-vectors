@@ -25,6 +25,18 @@ draw:
   world transform in four `vec4` material fields and sets a private
   `mvPreviousWorld` in the vertex stage, which the output bit reads.
 
+The output fills the contract's `.z` and `.w` too:
+
+- **`.z`:** 1 (exact) on tracked meshes, 3 (rigid) on tracked meshes with a
+  skeleton or morph weights, 2 (camera only) on everything else, and 4 (no
+  previous position) on a tracked mesh's first frame, its first frame back
+  after being hidden, and after `reset()`. The tracked bit carries the flag in
+  a fifth material field; the output's own default is 2.
+- **`.w`:** the previous clip `w`, which under a perspective projection is the
+  previous view depth. An orthographic camera has none to give (pixi-3d keeps
+  no previous view matrix), so `.w` is 0 there, which the contract reads as
+  "not available".
+
 `MotionVectors.update()` runs once per frame, after the app moves things and
 before the view renders. It writes each tracked mesh's previous transform with
 the same frame-keyed history as the three node (`src/shared/history.ts`). Every
@@ -57,6 +69,11 @@ SwiftShader at 640×360, rendering off screen.
 
 The last row is a pixi-3d limit that both outputs share (below, ask 3).
 
+`.z` and `.w` (2026-11-17): every pixel of every case carries the expected
+flag (1 on the plane, 4 on its first frame back, 2 on the untracked backdrop),
+and `.w` reads the previous camera's distance to the plane (10) or backdrop
+(15) exactly as f16 stores it. The check bars both.
+
 ## Limits
 
 - **Each tracked mesh gets its own material.** A material field is the only
@@ -70,6 +87,11 @@ The last row is a pixi-3d limit that both outputs share (below, ask 3).
 - **`BatchedMesh3D` slots** aren't tracked: their transforms live in the batch's
   store, not on a mesh. They get camera motion only.
 - **One camera history per render.** Same as pixi-3d's own output.
+- **A camera's first frame reads flag 2, not 4.** pixi-3d doesn't expose
+  whether its camera has a previous view-projection, so the adapter can't flag
+  the camera's first frame or a camera `resetHistory()`. The motion there is
+  zero, so only the flag is wrong.
+- **No `.w` under an orthographic camera** (above).
 - Blended surfaces and materials with a template of their own write nothing,
   as in pixi-3d.
 
@@ -77,7 +99,14 @@ The last row is a pixi-3d limit that both outputs share (below, ask 3).
 
 `velocityOutput` exists partly because we asked for motion vectors. Each item
 below would make it a full motion source, and would retire most of this
-adapter. Drafts, not filed yet.
+adapter. Filed upstream as pull requests (2026-11-17):
+[#50](https://github.com/pixijs/3d/pull/50) (1),
+[#51](https://github.com/pixijs/3d/pull/51) (2),
+[#52](https://github.com/pixijs/3d/pull/52) (3),
+[#53](https://github.com/pixijs/3d/pull/53) (4),
+[#54](https://github.com/pixijs/3d/pull/54) (5). When they land, the adapter
+shrinks to converting pixi-3d's output to the contract and re-running
+`npm run check:pixi`.
 
 1. **Object motion in `velocityOutput`.** Every mesh's transform already lives in
    the renderable store (`uRenderableStorage[inst.id].transform`, rows stable
@@ -98,7 +127,9 @@ adapter. Drafts, not filed yet.
 4. **An unclamped, full-precision option.** `rg16float` clamped to ±1 UV is
    right for motion blur. Reprojection wants the contract's
    `rgba16float` and no clamp (a cut's jump is information), with `.zw` free for
-   a flag and previous depth.
+   a flag and previous depth. CONTRACT.md now specifies both (2026-11-17), so
+   pixi-3d could fill them in the same output: its camera history knows the
+   no-previous case the adapter can't see.
 5. **A documented per-draw id in the vertex scope.** `inst.id` and `renderable`
    are template locals today. A public name would let bits read per-mesh
    store data without a material field.

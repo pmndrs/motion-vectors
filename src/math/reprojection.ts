@@ -3,6 +3,8 @@
  * hold the WGSL's math to. Matrices are column-major (three's `elements`).
  */
 
+import { MotionFlag } from '../flags.js';
+
 type Mat4 = ArrayLike<number>;
 type Vec4 = [number, number, number, number];
 
@@ -15,11 +17,13 @@ function transform(m: Mat4, v: Vec4): Vec4 {
     ];
 }
 
-/** Result of {@link cameraMotionAt}. */
+/** Result of {@link cameraMotionAt}: the contract texel (CONTRACT.md) plus this frame's depth. */
 export interface CameraMotionSample {
-    /** NDC delta, current − previous (three's `velocity` convention). */
+    /** `.xy`: NDC delta, current − previous (three's `velocity` convention). */
     velocity: [number, number];
-    /** Linear depth in the previous camera (−1 when behind it). */
+    /** `.z`: {@link MotionFlag.CameraOnly}, or {@link MotionFlag.NoPrevious} behind the previous camera or without a previous frame. */
+    flag: number;
+    /** `.w`: linear depth in the previous camera, or 0 with no previous position. */
     previousDepth: number;
     /** Linear depth in the current camera. */
     depth: number;
@@ -34,7 +38,8 @@ export interface CameraMotionSample {
  * @param previousViewProjection - Previous unjittered projection·view
  * @param view - Current view matrix
  * @param previousView - Previous view matrix
- * @returns Motion and linear depths
+ * @param known - Whether a previous frame exists (false: the first frame, or after a reset)
+ * @returns Motion, flag and linear depths
  */
 export function cameraMotionAt(
     uv: [number, number],
@@ -44,16 +49,18 @@ export function cameraMotionAt(
     previousViewProjection: Mat4,
     view: Mat4,
     previousView: Mat4,
+    known = true,
 ): CameraMotionSample {
     const h = transform(inverseViewProjectionJittered, [uv[0] * 2 - 1, 1 - uv[1] * 2, depth, 1]);
     const world: Vec4 = [h[0] / h[3], h[1] / h[3], h[2] / h[3], 1];
     const cur = transform(viewProjection, world);
     const prev = transform(previousViewProjection, world);
-    const behind = prev[3] <= 1e-6;
+    const none = !known || prev[3] <= 1e-6;
     const viewZ = (m: Mat4) => -(m[2] * world[0] + m[6] * world[1] + m[10] * world[2] + m[14]);
     return {
-        velocity: behind ? [0, 0] : [cur[0] / cur[3] - prev[0] / prev[3], cur[1] / cur[3] - prev[1] / prev[3]],
-        previousDepth: behind ? -1 : viewZ(previousView),
+        velocity: none ? [0, 0] : [cur[0] / cur[3] - prev[0] / prev[3], cur[1] / cur[3] - prev[1] / prev[3]],
+        flag: none ? MotionFlag.NoPrevious : MotionFlag.CameraOnly,
+        previousDepth: none ? 0 : viewZ(previousView),
         depth: viewZ(view),
     };
 }

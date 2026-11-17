@@ -9,13 +9,19 @@ import { HISTOGRAM_BINS, LUMA_HISTOGRAM_SHADER } from '../src/webgpu/shaders/lum
 import {
     COMPARE_CANDIDATE_WORDS,
     COMPARE_CAP_PIXELS,
+    COMPARE_DEPTH_CAP,
+    COMPARE_DEPTH_FIXED_POINT,
     COMPARE_FIXED_POINT,
     COMPARE_HEADER_WORDS,
     COMPARE_OBJECT_STRIDE,
     COMPARE_OBJECTS,
     COMPARE_WORDS,
     MOTION_COMPARE_SHADER,
+    ORACLE_NO_PREVIOUS,
+    ORACLE_VALID,
+    oracleCode,
 } from '../src/webgpu/shaders/motionCompare.js';
+import { MotionFlag } from '../src/flags.js';
 import { CANDIDATE_FIELDS, MAX_CANDIDATES, MOTION_RESIDUAL_SHADER, STATS_STRIDE } from '../src/webgpu/shaders/motionResidual.js';
 
 //* Camera Helpers
@@ -101,8 +107,29 @@ describe('cameraMotionAt (CPU mirror of cameraMotion.ts)', () => {
             uv, depth, vp.clone().invert().elements, vp.elements, viewProjection(previous).elements,
             current.matrixWorldInverse.elements, previous.matrixWorldInverse.elements,
         );
-        expect(sample.previousDepth).toBe(-1);
+        expect(sample.previousDepth).toBe(0);
+        expect(sample.flag).toBe(MotionFlag.NoPrevious);
         expect(sample.velocity).toEqual([0, 0]);
+    });
+
+    it('flags camera-only motion on a surface, and no previous position without a previous frame', () => {
+        const previous = camera([3, 2, 6]);
+        const current = camera([2.6, 2.1, 5.7], [0.1, 0, 0]);
+        const { uv, depth } = rasterize(point, current);
+        const vp = viewProjection(current);
+        const args = [uv, depth, vp.clone().invert().elements, vp.elements, viewProjection(previous).elements, current.matrixWorldInverse.elements, previous.matrixWorldInverse.elements] as const;
+        expect(cameraMotionAt(...args).flag).toBe(MotionFlag.CameraOnly);
+        const first = cameraMotionAt(...args, false);
+        expect(first).toMatchObject({ flag: MotionFlag.NoPrevious, velocity: [0, 0], previousDepth: 0 });
+    });
+});
+
+describe('MotionFlag', () => {
+    it('is exact in rgba16float and ordered by trust, with the cleared value meaning no surface', () => {
+        const values = Object.values(MotionFlag);
+        expect(values).toEqual([0, 1, 2, 3, 4]);
+        expect(MotionFlag.NoSurface).toBe(0);
+        for (const value of values) expect(Math.fround(value)).toBe(value);
     });
 });
 
@@ -148,19 +175,29 @@ describe('decodeStats', () => {
         const offset = RESIDUAL_SLOTS * STATS_STRIDE + HISTOGRAM_SLOTS * HISTOGRAM_BINS;
         const words = new Uint32Array(offset + COMPARE_WORDS);
         const base = offset + 3 * COMPARE_OBJECT_STRIDE;
-        // Object 3: 200 valid pixels moving 1.5 px; candidate 1 errs 0.25 px on average.
+        // Object 3: 200 valid pixels moving 1.5 px; candidate 1 errs 0.25 px on average,
+        // claims a previous position on 190 of them at 0.001 relative depth error, and
+        // flags 12 covered pixels wrong.
         words.set([200, 4, 200 * 1.5 * COMPARE_FIXED_POINT], base);
-        words.set([200 * 0.25 * COMPARE_FIXED_POINT, 50, 10], base + COMPARE_HEADER_WORDS + COMPARE_CANDIDATE_WORDS);
+        words.set([200 * 0.25 * COMPARE_FIXED_POINT, 50, 10, 190 * 0.001 * COMPARE_DEPTH_FIXED_POINT, 190, 12], base + COMPARE_HEADER_WORDS + COMPARE_CANDIDATE_WORDS);
         const compare = decodeStats(words, new Set(), new Set(), true).compare!;
         expect(compare).toHaveLength(COMPARE_OBJECTS);
         expect(compare[0].valid).toBe(0);
         expect(compare[3]).toMatchObject({ valid: 200, noPrevious: 4, meanMotion: 1.5 });
-        expect(compare[3].candidates[1]).toEqual({ meanError: 0.25, over025: 0.25, over1: 0.05 });
+        expect(compare[3].candidates[1]).toMatchObject({ meanError: 0.25, over025: 0.25, over1: 0.05, depthPixels: 190, wrongFlags: 12 });
+        expect(compare[3].candidates[1].depthError).toBeCloseTo(0.001, 6);
         expect(decodeCompare(words.subarray(offset))[3].valid).toBe(200);
     });
 
     it('cannot overflow the capped sums of a full frame up to 1920×1080', () => {
         expect(1920 * 1080 * COMPARE_CAP_PIXELS * COMPARE_FIXED_POINT).toBeLessThan(2 ** 32);
+        expect(1920 * 1080 * COMPARE_DEPTH_CAP * COMPARE_DEPTH_FIXED_POINT).toBeLessThan(2 ** 32);
+    });
+
+    it('packs the oracle marker and object id into one exact f16 channel', () => {
+        expect(oracleCode(ORACLE_VALID, COMPARE_OBJECTS - 1)).toBeLessThan(2048);
+        expect(oracleCode(ORACLE_NO_PREVIOUS, 5) % 8).toBe(5);
+        expect(Math.floor(oracleCode(ORACLE_VALID, 7) / 8)).toBe(ORACLE_VALID);
     });
 });
 

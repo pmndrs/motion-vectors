@@ -1,8 +1,9 @@
 # Motion vectors — spec and plan
 
-**Status (2026-11-15): Phase 2 (three node) in progress; D1 passed; pixi-3d
-adapter built (experimental, [PIXI.md](PIXI.md)); cut detectors compared
-(MOTION.md §7).** Phases 0
+**Status (2026-11-17): Phase 2 (three node) in progress; D1 passed; the
+contract's `.z`/`.w` settled; pixi-3d adapter built (experimental,
+[PIXI.md](PIXI.md)); cut detection keys on depth consistency (MOTION.md §7) and
+runs on the GPU (Phase 3, MOTION.md §9).** Phases 0
 and 1 ran incubating in [pmndrs/upscaler](https://github.com/pmndrs/upscaler);
 this repo took them over with their history and builds on three **r187**. The
 node meets every §4 oracle case (MOTION.md §8). It will
@@ -70,14 +71,18 @@ table below is its summary.
 |---|---|
 | Value | NDC delta, **current − previous**, y up (three's `velocity` convention). A consumer converts to UV with `motionScale` (three: `(0.5, −0.5)`), and `prevUV = uv − motion · scale`. |
 | Jitter | **Jitter-free.** Both endpoints use the unjittered projection. |
-| Format | `rgba16float` at render resolution. `.xy` carries motion; `.zw` are reserved (see below) and consumers must ignore them. |
+| Format | `rgba16float` at render resolution. `.xy` carries motion, `.z` a flag, `.w` the previous linear depth (see below). |
 | Meaning | For each pixel: where the surface point under it was on screen last frame. Not "where the pixel's colour came from" (that's shading motion, out of contract). |
-| Unknown | A point with no previous position (it was behind the previous camera, or newly spawned) reports **0** and must be flagged in `.z` once the flag is specified. |
+| Unknown | A point with no previous position (it was behind the previous camera, not drawn last frame, or history was reset) reports **0** and flag 4 in `.z`. |
 | Per engine | Engines whose native convention differs (Babylon: linear `0.5·(prev − cur)`, Y-flipped render targets) are documented with their `motionScale`. The source today is the upscaler's [engine-contract.md](https://github.com/pmndrs/upscaler/blob/main/docs/engine-contract.md); its motion part moves into CONTRACT.md. |
 
-Reserved channels: `.z` is a confidence/source flag (exact geometric, depth-derived
-camera-only, estimated), `.w` is the previous linear depth. Both are specified
-during Phase 2 and must be settled before the **P** gate (§6).
+`.z` and `.w` (settled 2026-11-17, CONTRACT.md): `.z` is an exact small
+integer, `MotionFlag`: 0 no surface (the cleared target), 1 exact, 2 camera
+motion only (motion from depth, untracked pixi meshes), 3 rigid fallback
+(R8), 4 no previous position. `.w` is the previous linear depth: view-space
+distance along the previous camera's axis, in world units, 0 when not
+available. It lets a consumer with a depth history test disocclusion at
+`previousUV` without guessing, including motion along the view axis.
 
 ### 3.2 Three velocity node
 
@@ -102,8 +107,8 @@ Requirements. Each one maps to a measured failure (MOTION.md) and a lab test (§
 
 | Product | Spec |
 |---|---|
-| Motion from depth | Depth + jittered inverse view-projection + current/previous unjittered view-projection → the §3.1 contract. Exact for static geometry, zero for object motion (flagged). Works for every engine that has depth. Built: `cameraMotion.ts`. |
-| Cut detection | **Changed in Phase 1:** keyed on the depth-consistency share (surface pixels where no motion candidate lands on a matching previous depth; background excluded), **entirely on the GPU** (no readback), writing a 1×1 flag a consumer reads in the same frame to reset its history. On the 14-event cut timeline (MOTION.md §7, "side by side") it gets 13 right at 0.2: cuts read 0.30–1.0, every look-alike (fade, flash, light steps, pans, whip pan, occluder sweep) at most 0.16; its one miss is a cut whose history stays valid. The luma histogram (EMD) gets 8 and is the fallback for depth-less inputs only: it misses in-scene cuts (0.34–0.36) and fires on flashes and light steps (4.2–14.2). Built today: the share is the warp residual's `noneValid` minus `backgroundUnscored`; the histogram is `lumaHistogram.ts` with a CPU comparison. |
+| Motion from depth | Depth + jittered inverse view-projection + current/previous unjittered view-projection → the §3.1 contract. Exact for static geometry, zero for object motion (flagged). Works for every engine that has depth. Built: `MotionFromDepth` (`cameraMotion.ts`), ~23 µs at 1280×720. |
+| Cut detection | **Changed in Phase 1:** keyed on the depth-consistency share (surface pixels where no motion candidate lands on a matching previous depth; background excluded), **entirely on the GPU** (no readback), writing a 1×1 flag a consumer reads in the same frame to reset its history. On the 14-event cut timeline (MOTION.md §7, "side by side") it gets 13 right at 0.2: cuts read 0.30–1.0, every look-alike (fade, flash, light steps, pans, whip pan, occluder sweep) at most 0.16; its one miss is a cut whose history stays valid. The luma histogram (EMD) gets 8 and is the fallback for depth-less inputs only: it misses in-scene cuts (0.34–0.36) and fires on flashes and light steps (4.2–14.2). Built (2026-11-17): `CutDetector` (`cutDetection.ts`), one compute pass and a 1×1 `rgba16float` flag, counts identical to the audit's on every lab frame, ~30 µs at 1280×720 (MOTION.md §9). The histogram is `lumaHistogram.ts` with a CPU comparison. |
 | Warping error | A reference-free temporal-stability metric with an occlusion mask, as a measurement export for benches. Not a runtime feature. Built: `motionResidual.ts`. |
 | Motion audit | Score candidate motion fields against the image (zero / engine / depth-derived / future flow). The lab's oracle; also usable by consumers to validate an engine. Built. |
 
@@ -253,8 +258,12 @@ outside a Fn, per-frame textures and storage (R7/R8).
 - `/three`: R1–R12. Built: R1–R6, R9, R10 (`MotionVectors`), each exact in the
   lab; R11 measured (+19 µs / +5.4 % on the water swell, the rest within
   noise). Open: R3 lab cases (skinned, instanced, batched), R7 author hook,
-  R8 flag, R12 per-case feature detection.
-- Settle the reserved channels.
+  R12 per-case feature detection. R8's flag exists (`.z` = 3 for
+  per-instance morph influences); the R7 hook will set it for deformations
+  the node can't see.
+- ✅ Reserved channels settled (2026-11-17): every producer (node, motion from
+  depth, pixi) writes `.z` and `.w`, and the lab and the pixi check bar both
+  against the oracle (CONTRACT.md "Conformance").
 - `/pixi` (experimental, added 2026-11-15): camera motion plus object motion for
   tracked meshes as a pixi-3d scene output, exact on rigid motion within one
   f16 step (`npm run check:pixi`, [PIXI.md](PIXI.md)). Skinning and morph report
@@ -262,12 +271,17 @@ outside a Fn, per-frame textures and storage (R7/R8).
 
 **Exit:** every §4 case meets its oracle; the carried-over pass bars hold; the R11 cost is measured.
 
-### Phase 3: core products (new repo; size: M)
-- Cut detection on the GPU with the 1×1 flag (building on the downsampler for the reduction if it fits, §3.6).
-- Motion from depth packaged as a drop-in velocity source.
+### Phase 3: core products (in progress, 2026-11-17; size: M)
+- ~~Cut detection on the GPU with the 1×1 flag.~~ Done (MOTION.md §9): no
+  false positives, every cut whose history is gone fires, 29.8 µs median. The
+  reduction is two counters, so it doesn't need the downsampler (§3.6).
+- Motion from depth packaged as a drop-in velocity source. `MotionFromDepth`
+  is its own class now (22.5 µs median); left: a three helper that feeds it
+  from a `WebGPURenderer` without the lab's plumbing.
 - Warping error exported as a measurement tool.
 
 **Exit:** cut cases pass with zero false positives; every cost measured.
+The cut half passed 2026-11-17 and CI holds it (`cuts` shard).
 
 ### Phase 4: consumers (size: M)
 - The upscaler bench consumes the node and the cut flag from a packed tarball (not a link).
@@ -310,7 +324,7 @@ ships from there.
 | R6 graph substitution isn't possible in TSL | D1 decides early; R7 + R8 cover it. |
 | Reusing `positionPrevious` ties us to three internals | It's a public TSL export, unlike the backend accessors we already depend on. Pin a three range and re-verify on each bump. |
 | Two installed copies of the package | Peer dependency plus a `Symbol.for` registry per renderer (R10). |
-| The contract changes after consumers adopt it | Gate P criterion 2; `.zw` reserved from the start. |
+| The contract changes after consumers adopt it | Gate P criterion 2; `.zw` reserved from the start and settled before any consumer integrates (2026-11-17). |
 | Extracting early, before the node exists, means building it without the upscaler's bench next to it | Phase 1 moves every scene the lab needs; the upscaler is a dev dependency of the new repo for output-quality runs. |
 | Glue copies drift between repos | Kept tiny; revisit a shared package only on observed drift (§3.4). |
 
@@ -325,9 +339,11 @@ ships from there.
 | 2026-11-14 | Name: repo `pmndrs/motion-vectors`, package `@pmndrs/motion-vectors`; repo created under `pmndrs`, private until 0.x | Done |
 | 2026-11-14 | Phase 1 done: lab self-contained under `packages/motion`, exact oracle, contract draft | Done |
 | 2026-11-14 | Extracted to pmndrs/motion-vectors with history; three r187 is the development baseline | Done (push pending) |
-| 2026-11-14 | Cut detection keys on depth consistency; the histogram is the depth-less fallback | Proposed (measured, MOTION.md §7) |
-| 2026-11-15 | Cut detectors A/B'd on 14 events: depth share (surface only, background excluded) 13/14 at 0.2, histogram 8/14 | Awaiting maintainer review |
-| 2026-11-15 | pixi-3d adapter on the public API (material field per tracked mesh); engine-side asks drafted in PIXI.md | Built, experimental; asks not filed |
+| 2026-11-14 | Cut detection keys on depth consistency; the histogram is the depth-less fallback | Agreed 2026-11-17 (measured, MOTION.md §7) |
+| 2026-11-15 | Cut detectors A/B'd on 14 events: depth share (surface only, background excluded) 13/14 at 0.2, histogram 8/14 | Agreed 2026-11-17: depth consistency is the default |
+| 2026-11-15 | pixi-3d adapter on the public API (material field per tracked mesh); engine-side asks drafted in PIXI.md | Built, experimental; asks filed upstream as pixijs/3d#50–54 |
+| 2026-11-17 | Cut detection ships as `CutDetector`: GPU-only, 1×1 flag, own two-counter reduction (no downsampler) | Done (MOTION.md §9) |
+| 2026-11-17 | `.z` = `MotionFlag` (0 no surface, 1 exact, 2 camera only, 3 rigid, 4 no previous); `.w` = previous view-space linear depth, 0 when not available | Done (CONTRACT.md) |
 | 2026-11-14 | D1: `positionNode` previous is feasible (graph rebuilt with substituted leaves) | Done (MOTION.md §8) |
 | — | P: publish 0.x | Pending (review by 2026-12-15, proposed) |
 | — | D3: optical flow | Pending (Phase 5) |

@@ -4,6 +4,8 @@ import { mrt, output, texture, velocity } from 'three/tsl';
 import { earthMovers, jensenShannon } from '../../src/index.js';
 import { createThreeTextureAllocator, getGPUTexture, MotionVectors } from '../../src/three/index.js';
 import {
+    CutDetector,
+    type CutResult,
     MotionAnalyzer,
     RESIDUAL_DEBUG_CLASSIFY,
     RESIDUAL_DEBUG_HEAT,
@@ -106,6 +108,11 @@ interface FrameRecord {
      * `entering` the part of it that came from off-screen.
      */
     cutDepth: ResidualStats | null;
+    /** The GPU cut detector's verdict (`CutDetector`, candidates zero, camera and the engine's velocity). */
+    cutGpu: CutResult | null;
+    /** GPU milliseconds of motion from depth and of the cut detector (where timestamp queries exist). */
+    cameraMotionMs?: number;
+    cutMs?: number;
     /** GPU milliseconds of the scene render (shadow + MRT passes), with `timing`. */
     renderMs?: number;
 }
@@ -141,6 +148,27 @@ internals._animation.stop();
 const camera = new THREE.PerspectiveCamera(50, 16 / 9, 0.1, 200);
 const analyzer = new MotionAnalyzer(device, createThreeTextureAllocator(renderer));
 await analyzer.init();
+// The GPU cut detector on the analyzer's motion from depth (the product a consumer runs).
+const cutDetector = new CutDetector(device);
+await cutDetector.init();
+
+// Timestamps around motion from depth (0, 1) and the cut detector (2, 3), where the device has them.
+const passTimer = device.features.has('timestamp-query')
+    ? {
+          set: device.createQuerySet({ type: 'timestamp', count: 4 }),
+          resolve: device.createBuffer({ size: 32, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC }),
+          read: device.createBuffer({ size: 32, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }),
+      }
+    : null;
+const passWrites = (first: number): GPUComputePassTimestampWrites | undefined =>
+    passTimer ? { querySet: passTimer.set, beginningOfPassWriteIndex: first, endOfPassWriteIndex: first + 1 } : undefined;
+async function readPassTimes(): Promise<{ cameraMotionMs: number; cutMs: number } | null> {
+    if (!passTimer) return null;
+    await passTimer.read.mapAsync(GPUMapMode.READ);
+    const t = new BigUint64Array(passTimer.read.getMappedRange().slice(0));
+    passTimer.read.unmap();
+    return { cameraMotionMs: Number(t[1] - t[0]) / 1e6, cutMs: Number(t[3] - t[2]) / 1e6 };
+}
 
 // One stable matrix for the session (see `velocityProjection`).
 const velocityProjection = new THREE.Matrix4();
@@ -268,7 +296,7 @@ async function run(request: LabRequest): Promise<{ frames: FrameRecord[]; object
             }
             velocityProjection.copy(unjittered);
             const view4 = camera.matrixWorldInverse;
-            oracle.beginFrame(new THREE.Matrix4().multiplyMatrices(unjittered, view4), frame / FPS);
+            oracle.beginFrame(new THREE.Matrix4().multiplyMatrices(unjittered, view4), frame / FPS, view4);
             if (driven) motionVectors.beginFrame();
             if (frame % rendersPerTick === 0) {
                 nodeFrame!.update();
@@ -291,7 +319,7 @@ async function run(request: LabRequest): Promise<{ frames: FrameRecord[]; object
                 viewProjection: new THREE.Matrix4().multiplyMatrices(unjittered, view4).elements,
                 inverseViewProjectionJittered: new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, view4).invert().elements,
                 view: view4.elements,
-            });
+            }, passWrites(0));
             analyzer.encodeHistogram(early, 0, gpu(color));
             device.queue.submit([early.finish()]);
 
@@ -339,6 +367,11 @@ async function run(request: LabRequest): Promise<{ frames: FrameRecord[]; object
                     debug: cutView ? { mode: RESIDUAL_DEBUG_CLASSIFY } : undefined,
                 });
             }
+            cutDetector.encode(late, analyzer.fromDepth, { motions: [gpu(engine)], timestampWrites: passWrites(2) });
+            if (passTimer) {
+                late.resolveQuerySet(passTimer.set, 0, 4, passTimer.resolve, 0);
+                late.copyBufferToBuffer(passTimer.resolve, 0, passTimer.read, 0, 32);
+            }
             analyzer.encodeSnapshot(late, 'input', gpu(color));
             analyzer.endFrame();
             device.queue.submit([late.finish()]);
@@ -346,10 +379,12 @@ async function run(request: LabRequest): Promise<{ frames: FrameRecord[]; object
 
             if (!measured) continue;
             const stats = await analyzer.readStats();
+            const cutGpu = await cutDetector.read();
+            const passTimes = await readPassTimes();
             const compare: Record<string, CompareObjectStats> = {};
             for (const [id, objectStats] of (stats.compare ?? []).entries())
                 if (objectStats.valid + objectStats.noPrevious > 0) compare[lab.objects[id] ?? `id-${id}`] = objectStats;
-            frames.push({ frame, segment: truth.segment, cut: truth.cut, jittered, compare, audit: stats.residuals[0], cutJS, cutEMD, cutDepth: stats.residuals[1], renderMs });
+            frames.push({ frame, segment: truth.segment, cut: truth.cut, jittered, compare, audit: stats.residuals[0], cutJS, cutEMD, cutDepth: stats.residuals[1], cutGpu, ...passTimes, renderMs });
         }
     } finally {
         if (trap) velocity.setProjectionMatrix(velocityProjection);

@@ -22,6 +22,7 @@ import {
     vertexIndex,
 } from 'three/tsl';
 
+import { MotionFlag } from '../flags.js';
 import { FrameHistory } from '../shared/history.js';
 
 /**
@@ -32,6 +33,7 @@ interface Builder {
     renderer: THREE.Renderer;
     object: THREE.Object3D;
     geometry: THREE.BufferGeometry;
+    material: THREE.Material;
     needsPreviousData(): boolean;
     getCache(): unknown;
     setCache(cache: unknown): void;
@@ -91,6 +93,32 @@ class HistoryUniformNode extends THREE.UniformNode<string, Value> {
     override updateAfter(nodeFrame: THREE.NodeFrame): undefined {
         const frame = nodeFrame as unknown as UpdateFrame;
         this._history.after(frame.object, this._read(frame));
+        return undefined;
+    }
+
+    /**
+     * Whether the drawn object's value this frame is a real previous one (not
+     * its current value standing in after a reset, a first draw, or a frame it
+     * wasn't drawn in). Hands history over first, so it doesn't depend on which
+     * node three updates first.
+     * @param frame - The node frame of the draw
+     * @returns 1 when known, else 0
+     */
+    knownFor(frame: UpdateFrame): number {
+        this._history.before(frame.object, this._motion.frameOf(frame), this._read(frame), this._motion.epoch);
+        return this._history.known(frame.object) ? 1 : 0;
+    }
+}
+
+/** 1 when the drawn object has a previous value in `source`'s history, else 0 (the contract's no-previous flag). */
+class KnownUniformNode extends THREE.UniformNode<'float', number> {
+    constructor(private readonly _source: HistoryUniformNode) {
+        super(0, 'float');
+        this.updateType = THREE.NodeUpdateType.OBJECT;
+    }
+
+    override update(nodeFrame: THREE.NodeFrame): undefined {
+        this.value = this._source.knownFor(nodeFrame as unknown as UpdateFrame);
         return undefined;
     }
 }
@@ -246,26 +274,34 @@ function installPatches(): void {
 
 //* Velocity Node
 /**
- * Motion in the contract's convention (CONTRACT.md: NDC, current − previous,
- * jitter-free), with three's `velocity` math but frame-keyed history: the
+ * The contract texel (CONTRACT.md): `.xy` motion (NDC, current − previous,
+ * jitter-free) with three's `velocity` math but frame-keyed history: the
  * camera's previous view-projection (R1) and each object's previous model
  * matrix (R4) hand over once per {@link MotionVectors} frame, and the
- * projection is the stable unjittered one (R2). A point with no previous
- * position (behind the previous camera) reports zero.
+ * projection is the stable unjittered one (R2). `.z` is the flag: exact, or
+ * rigid where the node can't follow a deformation (R8), or no previous
+ * position (behind the previous camera, the camera's or object's first frame,
+ * after a reset, or an object not drawn last frame; motion and depth 0 there).
+ * `.w` is the previous linear depth.
  */
 class MotionVelocityNode extends THREE.Node {
     readonly isMotionVelocityNode = true;
     private readonly _cameras = new FrameHistory<THREE.Matrix4>((matrix) => matrix.clone());
+    private readonly _views = new FrameHistory<THREE.Matrix4>((matrix) => matrix.clone());
     private readonly _currentProjection = uniform(new THREE.Matrix4()).setGroup(renderGroup);
     private readonly _previousViewProjection = uniform(new THREE.Matrix4()).setGroup(renderGroup);
+    private readonly _previousView = uniform(new THREE.Matrix4()).setGroup(renderGroup);
+    private readonly _cameraKnown = uniform(0).setGroup(renderGroup);
     private readonly _viewProjection = new THREE.Matrix4();
     private readonly _previousModel: HistoryUniformNode;
+    private readonly _objectKnown: KnownUniformNode;
 
     constructor(private readonly _motion: MotionVectors) {
-        super('vec2');
+        super('vec4');
         this.updateType = THREE.NodeUpdateType.RENDER;
         this.updateAfterType = THREE.NodeUpdateType.RENDER;
         this._previousModel = new HistoryUniformNode(new THREE.Matrix4(), 'mat4', _motion, (frame) => frame.object.matrixWorld as unknown as Value);
+        this._objectKnown = new KnownUniformNode(this._previousModel);
     }
 
     private _current(camera: THREE.Camera): THREE.Matrix4 {
@@ -277,21 +313,29 @@ class MotionVelocityNode extends THREE.Node {
     override update(nodeFrame: THREE.NodeFrame): undefined {
         const frame = nodeFrame as unknown as UpdateFrame;
         const current = this._current(frame.camera);
-        this._previousViewProjection.value.copy(this._cameras.before(frame.camera, this._motion.frameOf(frame), current, this._motion.epoch));
+        const ordinal = this._motion.frameOf(frame);
+        this._previousViewProjection.value.copy(this._cameras.before(frame.camera, ordinal, current, this._motion.epoch));
+        this._previousView.value.copy(this._views.before(frame.camera, ordinal, frame.camera.matrixWorldInverse, this._motion.epoch));
+        this._cameraKnown.value = this._cameras.known(frame.camera) ? 1 : 0;
         return undefined;
     }
 
     override updateAfter(nodeFrame: THREE.NodeFrame): undefined {
         const frame = nodeFrame as unknown as UpdateFrame;
         this._cameras.after(frame.camera, this._current(frame.camera));
+        this._views.after(frame.camera, frame.camera.matrixWorldInverse);
         return undefined;
     }
 
-    override setup(): THREE.Node {
+    override setup(builder: THREE.NodeBuilder): THREE.Node {
         const current = this._currentProjection.mul(modelViewMatrix).mul(vec4(positionLocal, 1));
-        const previous = this._previousViewProjection.mul(this._previousModel as unknown as THREE.Node<'mat4'>).mul(vec4(positionPrevious, 1));
+        const previousWorld = (this._previousModel as unknown as THREE.Node<'mat4'>).mul(vec4(positionPrevious, 1));
+        const previous = this._previousViewProjection.mul(previousWorld);
         const motion = current.xy.div(current.w).sub(previous.xy.div(previous.w));
-        return select(previous.w.greaterThan(0), motion, vec2(0));
+        const previousDepth = this._previousView.mul(previousWorld).z.negate();
+        const valid = previous.w.greaterThan(0).and(this._cameraKnown.mul(this._objectKnown).greaterThan(0.5));
+        const flag = this._motion._rigidFallback(builder as unknown as Builder) ? MotionFlag.Rigid : MotionFlag.Exact;
+        return vec4(select(valid, motion, vec2(0)), select(valid, float(flag), float(MotionFlag.NoPrevious)), select(valid, previousDepth, float(0)));
     }
 }
 
@@ -314,9 +358,11 @@ class MotionVelocityNode extends THREE.Node {
  */
 export class MotionVectors {
     /**
-     * The motion node (`vec2`, NDC current − previous) for an MRT output named `velocity`.
+     * The motion node for an MRT output named `velocity`: the contract texel
+     * (CONTRACT.md), `.xy` NDC current − previous, `.z` a {@link MotionFlag},
+     * `.w` the previous linear depth. Give the slot an `rgba16float` texture.
      */
-    readonly velocity: THREE.Node<'vec2'>;
+    readonly velocity: THREE.Node<'vec4'>;
     /**
      * The unjittered projection both endpoints use (R2), or `null` for the
      * camera's own. Read every frame, so one stable matrix whose contents change
@@ -338,7 +384,7 @@ export class MotionVectors {
     private readonly _proxies = new WeakMap<THREE.Node, HistoryUniformNode>();
 
     private constructor() {
-        this.velocity = new MotionVelocityNode(this) as unknown as THREE.Node<'vec2'>;
+        this.velocity = new MotionVelocityNode(this) as unknown as THREE.Node<'vec4'>;
     }
 
     /**
@@ -408,6 +454,21 @@ export class MotionVectors {
             this._proxies.set(node, proxy);
         }
         return proxy as unknown as AnyNode;
+    }
+
+    /**
+     * @internal Whether the draw being built reports rigid motion for a
+     * deformation it can't follow (R8): per-instance morph influences, or any
+     * deformation in a material built while {@link MotionVectors.enabled} was off.
+     */
+    _rigidFallback(builder: Builder): boolean {
+        const mesh = builder.object as THREE.Mesh & { morphTexture?: THREE.Texture | null };
+        const material = builder.material as (THREE.NodeMaterial & { displacementMap?: THREE.Texture | null }) | undefined;
+        const geometry = builder.geometry;
+        const morphs = geometry?.morphAttributes.position !== undefined;
+        if (morphs && mesh.morphTexture) return true;
+        if (this.enabled) return false;
+        return morphs || !!material?.displacementMap || (material?.positionNode ?? null) !== null;
     }
 
     /** @internal Assigns last frame's morphed position to `positionPrevious` (R5). */

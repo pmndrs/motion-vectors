@@ -20,7 +20,9 @@ No optical flow yet. That is deliberately gated on the results here (§8).
 | Warp residual | `src/webgpu/shaders/motionResidual.ts` | Per pixel and per candidate motion field (zero motion is always candidate 0), warps the previous image by bilinear sampling and compares conditioned luma `l/(1+l)`. An occlusion test compares the previous linear depth at the warped position with the static-scene expectation (5 % relative). Per-workgroup reduction gives the mean residual plus valid / best / unexplained (> 0.02) / beaten / moving shares. Debug views: classification, per-candidate heat, per-candidate motion. |
 | Luma histogram | `src/webgpu/shaders/lumaHistogram.ts` | 64 bins of conditioned luma, the cheapest form of FidelityFX Optical Flow's scene-change signal. Compared on the CPU (`math/histogram.ts`: Jensen–Shannon, earth mover's distance). |
 | Oracle comparison | `src/webgpu/shaders/motionCompare.ts` | Per object id, endpoint error in render pixels of each candidate against an oracle rendered in the same pass (§7). |
-| `MotionAnalyzer` | `src/webgpu/MotionAnalyzer.ts` | Engine-free orchestration on a bare `GPUDevice` (its own copy of the `TextureAllocator` seam). |
+| `MotionFromDepth` | `src/webgpu/MotionFromDepth.ts` | The camera-motion pass as a product: matrices and depth history in, the contract texture and linear depth out (§9). |
+| Cut detector | `src/webgpu/CutDetector.ts`, `shaders/cutDetection.ts` | The depth-consistency share reduced to a 1×1 flag on the GPU, no readback (§9). |
+| `MotionAnalyzer` | `src/webgpu/MotionAnalyzer.ts` | Engine-free orchestration of the lab's passes on a bare `GPUDevice` (its own copy of the `TextureAllocator` seam); motion from depth is a `MotionFromDepth` it owns. |
 | Motion lab | `lab/` | The package's own scenes (deformers, move-then-hold cases, water, a courtyard camera track and a cut timeline) with oracle materials. No upscaler. |
 | Lab driver | `scripts/measure-motion.mjs` | Experiments `oracle`, `deformers`, `cases`, `ticks`, `jitter`, `water`, `track`, `cuts`, plus `probe`. |
 | Upscaler probe | in pmndrs/upscaler: `bench/motion-upscaler.html`, `scripts/measure-motion-upscaler.mjs` | The upscaler's consumer of the package: Q19/Q10 through native / bilinear / spatial / temporal (`audit-q19`, `warp`, `cut`). Stays in the upscaler. |
@@ -396,7 +398,65 @@ graph's vertex cost; scenes without deformation read within noise. The
 laptop GPU idles between the lab's read-back frames, so absolute times are
 low-clock numbers; compare only within one run.
 
-## 9. What's worth building next
+### `.z` and `.w` (2026-11-17)
+
+The node writes the full contract texel (CONTRACT.md): the flag in `.z` and
+the previous linear depth in `.w`. The oracle now writes its own previous depth
+(`.w`) and packs its marker and object id into `.z`, and the comparison scores
+both channels (`motionCompare.ts`). On Metal, every node row above reads
+0.00000 relative `.w` error and no wrong flag, first frames included. The one
+exception is the re-entering ball: 327 pixels on its first frames back read
+4 (no previous position) where the oracle knows where it was. That is the
+honest answer for history kept per draw, and the bars exempt it. Motion from
+depth reads flag 2 and the exact previous depth on static geometry.
+
+## 9. Phase 3: cut detection on the GPU (2026-11-17)
+
+`CutDetector` (`src/webgpu/CutDetector.ts`) is §7's depth-consistency share as
+a product. One compute pass, two dispatches:
+
+- **count:** for every surface pixel (camera motion's flag ≠ 0), is there a
+  candidate (zero motion, camera motion from depth, up to two more fields such
+  as the engine's velocity) whose previous position is on screen and lands on
+  a previous linear depth within 5 % of the static expectation (camera
+  motion's `.w`)? It counts the pixels with none, and the surface pixels, per
+  workgroup, then atomically.
+- **resolve:** one invocation reads and zeroes the counters (no clear pass) and
+  writes a 1×1 `rgba16float` flag: `r` reset, `g` the share, `b` the surface
+  share, `a` whether a previous frame existed. A consumer binds it in the same
+  frame. With no previous frame it writes reset = 1.
+
+The verdict is `share > 0.2` with at least 5 % surface, as in §7.
+`cutVerdict` (`src/math/cut.ts`) is the CPU mirror the unit tests pin.
+`MotionFromDepth` (`src/webgpu/MotionFromDepth.ts`) became its own class in
+the same change: it is the detector's input and Phase 3's drop-in velocity
+source. The lab's `MotionAnalyzer` now owns one instead of its own copy of the
+pass.
+
+`npm run measure -- --experiments cuts` runs the detector next to the audit on
+every frame of the cut timeline (1280×720, Apple M-series, Metal, the engine's
+velocity as the extra candidate):
+
+| Check | Result |
+|---|---|
+| Counts vs the audit's `noneValid − backgroundUnscored` and surface | **identical**: 0 pixels apart on all 569 frames |
+| Cuts fired (cut frame) | 6 of 7. The sky shot reads 0.002 and keeps its history, as in §7 |
+| False positives (look-alike events and quiet frames) | **0**. Worst share: whip pan 0.160, occluder 0.117, quiet 0.000 |
+| Cut detector, GPU time | median **29.8 µs**, mean 29.1 µs, max 133 µs |
+| Motion from depth, GPU time | median **22.5 µs**, mean 22.7 µs, max 93 µs |
+
+The timestamps cover each pass alone; the detector needs motion from depth, so
+a consumer that has no use for camera motion pays ~52 µs a frame in all. The
+maxima are the run's first five frames (GPU warm-up); the 95th percentiles are
+30.9 µs and 23.7 µs. `--check` turns the rows into
+bars, and CI runs them on SwiftShader at 640×360 (the `cuts` shard).
+
+What a consumer still decides: what a reset means for its history (drop it,
+or weight it to zero for a frame) and whether to pass its own velocity as a
+candidate. Without the velocity, objects moving along the view axis read as
+inconsistent; the cut timeline has none, so that cost isn't measured yet.
+
+## 10. What's worth building next
 
 The agreed spec and phased plan, with decision gates and the intended split
 into its own package, is [PLAN.md](PLAN.md).
@@ -407,9 +467,10 @@ ships.
 1. **Automatic cut detection in the upscaler.** It's a clear win and cheap.
    Phase 1 (§7) changed the signal: key it on the depth-consistency share
    (pixels no motion candidate can reproject), not the luma histogram, which
-   misses cuts inside one scene and fires on flashes. Compute it on the GPU (no
-   readback; the reset feeds the next frame's history weight), behind an option.
-   The upscaler's own disocclusion pass may already hold most of this signal.
+   misses cuts inside one scene and fires on flashes. Built on the GPU in
+   Phase 3 (§9): ~30 µs, no readback, a 1×1 flag. What's left is the upscaler
+   reading that flag in its accumulate pass, behind an option (Phase 4). Its
+   own disocclusion pass may already hold most of this signal.
 2. **A depth-only motion mode** (`velocity` omitted → camera motion from depth)
    for static scenes. Measure the saved MRT and vertex cost, and document the
    object-motion limit.

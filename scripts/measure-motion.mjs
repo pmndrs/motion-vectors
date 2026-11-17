@@ -18,7 +18,10 @@
  * - track: per segment, the new bar (Q19's motion types in the lab's scene).
  * - cuts: the two cut detectors side by side (luma histogram EMD vs the
  *   depth-consistency share) on cuts and on the events that must not fire,
- *   with before / at / depth-map pictures per event.
+ *   with before / at / depth-map pictures per event, plus the GPU detector
+ *   (`CutDetector`): its counts must equal the audit's pixel for pixel, its
+ *   verdict must fire on every cut but the sky shot and on nothing else, and
+ *   its cost (and motion from depth's) is timed where timestamps exist.
  * - probe: one --request (or an array), prints per-object errors.
  *
  * Usage:
@@ -86,6 +89,24 @@ function expectExact(label, summary, candidate) {
         failures.push(`${label}: ${COMPARE[candidate]} error ${error ?? 'n/a'} px (bar ${EXACT_PIXELS} px)`);
 }
 
+/** Mean relative `.w` error a conforming source stays under: one f16 step (2^-11) of rounding, twice. */
+const DEPTH_EXACT = 2 ** -10;
+/**
+ * Records the contract's `.z`/`.w` bars for --check: no covered pixel with a
+ * flag that contradicts the oracle, and `.w` within DEPTH_EXACT of the oracle's
+ * previous depth where the candidate claims a previous position.
+ * @param {string} label - What is checked
+ * @param {ReturnType<typeof compareSummary>} summary - An object's comparison
+ * @param {number} candidate - 1 the `velocity` slot, 2 camera motion from depth
+ * @param {{ flags?: boolean }} [options] - `flags: false` skips the flag bar (honest no-previous flags the oracle doesn't share)
+ */
+function expectContract(label, summary, candidate, { flags = true } = {}) {
+    const c = summary?.candidates[candidate];
+    if (!c) return failures.push(`${label}: ${COMPARE[candidate]} not measured`);
+    if (flags && c.wrongFlags !== 0) failures.push(`${label}: ${COMPARE[candidate]} ${c.wrongFlags} pixel(s) with a wrong .z flag`);
+    if (c.depthError === null || !(c.depthError <= DEPTH_EXACT)) failures.push(`${label}: ${COMPARE[candidate]} .w error ${c.depthError ?? 'n/a'} (bar ${DEPTH_EXACT})`);
+}
+
 //* Summaries
 const fmt = (value, digits = 3, pad = 8) => (value === null || value === undefined || !Number.isFinite(value) ? '—' : value.toFixed(digits)).padStart(pad);
 const pct = (value, digits = 1, pad = 7) => fmt(value === null ? null : 100 * value, digits, pad);
@@ -96,19 +117,27 @@ const isMotion = (segment) => !/^(still|hold)/.test(segment);
  * @returns {{ valid: number, motion: number|null, candidates: { name: string, error: number|null, over025: number|null, over1: number|null }[] } | null}
  */
 function compareSummary(frames, object) {
-    const rows = frames.map((frame) => frame.compare[object]).filter((row) => row && row.valid > 0);
+    const covered = frames.map((frame) => frame.compare[object]).filter(Boolean);
+    const rows = covered.filter((row) => row.valid > 0);
     const pixels = rows.reduce((total, row) => total + row.valid, 0);
     if (!pixels) return null;
     const weighted = (pick) => rows.reduce((total, row) => total + pick(row) * row.valid, 0) / pixels;
+    const sum = (pick) => covered.reduce((total, row) => total + pick(row), 0);
     return {
         valid: pixels / frames.length,
         motion: weighted((row) => row.meanMotion),
-        candidates: COMPARE.map((name, k) => ({
-            name,
-            error: weighted((row) => row.candidates[k].meanError),
-            over025: weighted((row) => row.candidates[k].over025),
-            over1: weighted((row) => row.candidates[k].over1),
-        })),
+        candidates: COMPARE.map((name, k) => {
+            const depthPixels = sum((row) => row.candidates[k].depthPixels);
+            return {
+                name,
+                error: weighted((row) => row.candidates[k].meanError),
+                over025: weighted((row) => row.candidates[k].over025),
+                over1: weighted((row) => row.candidates[k].over1),
+                // .z/.w (CONTRACT.md): flags over every covered pixel, the first frame's too.
+                wrongFlags: sum((row) => row.candidates[k].wrongFlags),
+                depthError: depthPixels ? sum((row) => row.candidates[k].depthError * row.candidates[k].depthPixels) / depthPixels : null,
+            };
+        }),
     };
 }
 
@@ -125,12 +154,12 @@ function auditSummary(frames) {
     }));
 }
 
-const COMPARE_HEADER = '  object/segment          px moved   zero err   three err  >0.25px  >1px   camera err  >0.25px';
+const COMPARE_HEADER = '  object/segment          px moved   zero err   three err  >0.25px  >1px   camera err  >0.25px  .z wrong   .w err';
 function printCompare(label, summary) {
     if (!summary) return console.log(`  ${label.padEnd(22)}  (not visible)`);
     const [zero, three, camera] = summary.candidates;
     console.log(
-        `  ${label.padEnd(22)} ${fmt(summary.motion)}  ${fmt(zero.error)}   ${fmt(three.error)}  ${pct(three.over025)} ${pct(three.over1, 1, 5)}  ${fmt(camera.error)}  ${pct(camera.over025)}`,
+        `  ${label.padEnd(22)} ${fmt(summary.motion)}  ${fmt(zero.error)}   ${fmt(three.error)}  ${pct(three.over025)} ${pct(three.over1, 1, 5)}  ${fmt(camera.error)}  ${pct(camera.over025)} ${String(camera.wrongFlags).padStart(9)} ${fmt(camera.depthError, 5)}`,
     );
 }
 function printAudit(label, rows) {
@@ -161,6 +190,9 @@ async function oracleCheck(run, screenshot) {
     expectExact('oracle: camera motion, static', summary.cameraStatic, 2);
     expectExact('oracle: camera motion, props', summary.cameraProps, 1);
     expectExact('oracle: moving props', summary.objectProps, 1);
+    // Motion from depth fills the contract's .z/.w: camera-only and exact previous depth on static geometry.
+    expectContract('oracle: camera motion, static', summary.cameraStatic, 2);
+    expectContract('oracle: camera motion, props', summary.cameraProps, 2);
     await run({ scene: 'track', end: 60, view: 'audit-motion', heatCandidate: 3 });
     await screenshot('oracle-track-f60');
     return summary;
@@ -244,14 +276,17 @@ async function node(run) {
     // dolly segments (several renders per tick still change history there).
     const quick = cli.check === true;
     const threeRun = (request) => (quick ? Promise.resolve(null) : run(request));
-    const header = '  scene/object/segment              px moved   three err   node err  >0.25px  >1px';
+    const header = '  scene/object/segment              px moved   three err   node err  >0.25px  >1px  .z wrong   .w err';
     const row = (label, three, ours) => {
-        summary[label] = { three: three?.candidates[1].error ?? null, node: ours?.candidates[1].error ?? null, motion: ours?.motion ?? null };
+        const c = ours?.candidates[1];
+        summary[label] = { three: three?.candidates[1].error ?? null, node: c?.error ?? null, motion: ours?.motion ?? null, wrongFlags: c?.wrongFlags ?? null, depthError: c?.depthError ?? null };
         if (!ours) return console.log(`  ${label.padEnd(32)}  (not visible)`);
         console.log(
-            `  ${label.padEnd(32)} ${fmt(ours.motion)}  ${fmt(three?.candidates[1].error)}   ${fmt(ours.candidates[1].error)}  ${pct(ours.candidates[1].over025)} ${pct(ours.candidates[1].over1, 1, 5)}`,
+            `  ${label.padEnd(32)} ${fmt(ours.motion)}  ${fmt(three?.candidates[1].error)}   ${fmt(c.error)}  ${pct(c.over025)} ${pct(c.over1, 1, 5)} ${String(c.wrongFlags).padStart(9)} ${fmt(c.depthError, 5)}`,
         );
         expectExact(`node: ${label}`, ours, 1);
+        // The re-entering ball is honestly flagged "no previous" on its first frame back; the oracle knows where it was.
+        expectContract(`node: ${label}`, ours, 1, { flags: label !== 'deformers reentry' });
     };
     console.log(header);
     for (const scene of ['deformers', 'cases', 'water']) {
@@ -391,6 +426,8 @@ const CUT_EVENTS = {
 };
 /** Thresholds the comparison is read at (EMD: Phase 0's, fit on Q10). */
 const CUT_THRESHOLDS = { emd: 0.5, depth: 0.2 };
+/** The one cut whose history stays valid (MOTION.md §7): the detector rightly keeps it. */
+const CUT_KEEPS_HISTORY = new Set(['cut-sky']);
 
 async function cuts(run, screenshot) {
     const result = await run({ scene: 'cuts' });
@@ -403,6 +440,15 @@ async function cuts(run, screenshot) {
         // shot was off-screen in the old camera. Under 5 % surface: no verdict.
         const surface = 1 - background;
         const inconsistent = depth ? depth.noneValid - depth.backgroundUnscored : 0;
+        // The GPU detector's counts against the audit's, in pixels (shares × pixels are integers).
+        const gpu = frame.cutGpu;
+        const parity =
+            depth && gpu
+                ? Math.max(
+                      Math.abs(Math.round(inconsistent * depth.pixels) - gpu.inconsistentPixels),
+                      Math.abs(Math.round(surface * depth.pixels) - gpu.surfacePixels),
+                  )
+                : null;
         return {
             frame: frame.frame,
             segment: frame.segment,
@@ -413,6 +459,11 @@ async function cuts(run, screenshot) {
             entering,
             background,
             depth: depth && surface >= 0.05 ? inconsistent / surface : null,
+            gpu: gpu?.share ?? null,
+            gpuCut: gpu?.cut ?? null,
+            parity,
+            cameraMotionMs: frame.cameraMotionMs ?? null,
+            cutMs: frame.cutMs ?? null,
         };
     });
     const max = (rows, key) => Math.max(0, ...rows.map((row) => row[key] ?? 0));
@@ -425,6 +476,7 @@ async function cuts(run, screenshot) {
         const judged = info.cut ? rows.filter((row) => row.cut) : rows;
         const peak = (key) => judged.reduce((best, row) => ((row[key] ?? -1) > (best?.[key] ?? -1) ? row : best), null);
         const at = peak('depth');
+        const gpuCut = judged.some((row) => row.gpuCut === true);
         events.push({
             segment: segment.name,
             ...info,
@@ -437,18 +489,44 @@ async function cuts(run, screenshot) {
             background: max(judged, 'background'),
             emdFrame: peak('emd')?.frame,
             depthFrame: at?.frame,
+            gpu: max(judged, 'gpu'),
+            gpuCut,
         });
+        // --check bars: a cut fires on its cut frame (but the sky shot, whose history stays valid); nothing else fires.
+        const expected = info.cut && !CUT_KEEPS_HISTORY.has(segment.name);
+        if (gpuCut !== expected) failures.push(`cut detector: ${info.label} ${gpuCut ? 'fired' : 'missed'} (GPU share ${max(judged, 'gpu').toFixed(3)})`);
     }
     // Holds after cuts and the plain holds: the steady-state floor of each signal.
     const quiet = series.filter((row) => !CUT_EVENTS[row.segment] || (CUT_EVENTS[row.segment].cut && !row.cut));
-    const floor = { emd: max(quiet, 'emd'), depth: max(quiet, 'depth'), depthRaw: max(quiet, 'depthRaw') };
+    const floor = { emd: max(quiet, 'emd'), depth: max(quiet, 'depth'), depthRaw: max(quiet, 'depthRaw'), gpu: max(quiet, 'gpu') };
+    const quietFires = quiet.filter((row) => row.gpuCut === true).map((row) => row.frame);
+    if (quietFires.length) failures.push(`cut detector: fired on quiet frame(s) ${quietFires.join(', ')}`);
+    const parity = Math.max(0, ...series.map((row) => row.parity ?? 0));
+    if (series.some((row) => row.parity === null)) failures.push('cut detector: a measured frame has no GPU verdict');
+    if (parity !== 0) failures.push(`cut detector: counts differ from the audit's by up to ${parity} pixel(s)`);
     const verdict = (value, threshold, cut) => (value > threshold ? (cut ? 'hit' : 'FALSE') : cut ? 'MISS' : 'ok');
-    console.log(`  ${'event'.padEnd(36)} ${'EMD'.padStart(8)}       ${'depth'.padStart(8)}       ${'raw'.padStart(8)} ${'enter'.padStart(8)} ${'bg'.padStart(8)}`);
+    const gpuVerdict = (row) => (row.gpuCut ? (row.cut ? 'hit' : 'FALSE') : row.cut ? (CUT_KEEPS_HISTORY.has(row.segment) ? 'keep' : 'MISS') : 'ok');
+    console.log(
+        `  ${'event'.padEnd(36)} ${'EMD'.padStart(8)}       ${'depth'.padStart(8)}       ${'GPU'.padStart(8)}       ${'raw'.padStart(8)} ${'enter'.padStart(8)} ${'bg'.padStart(8)}`,
+    );
     for (const row of events)
         console.log(
-            `  ${row.label.padEnd(36)} ${fmt(row.emd)} ${verdict(row.emd, CUT_THRESHOLDS.emd, row.cut).padEnd(5)} ${fmt(row.depth)} ${verdict(row.depth, CUT_THRESHOLDS.depth, row.cut).padEnd(5)} ${fmt(row.depthRaw)} ${fmt(row.entering)} ${fmt(row.background)}`,
+            `  ${row.label.padEnd(36)} ${fmt(row.emd)} ${verdict(row.emd, CUT_THRESHOLDS.emd, row.cut).padEnd(5)} ${fmt(row.depth)} ${verdict(row.depth, CUT_THRESHOLDS.depth, row.cut).padEnd(5)} ${fmt(row.gpu)} ${gpuVerdict(row).padEnd(5)} ${fmt(row.depthRaw)} ${fmt(row.entering)} ${fmt(row.background)}`,
         );
-    console.log(`  ${'quiet frames (max)'.padEnd(36)} ${fmt(floor.emd)}       ${fmt(floor.depth)}       ${fmt(floor.depthRaw)}`);
+    console.log(`  ${'quiet frames (max)'.padEnd(36)} ${fmt(floor.emd)}       ${fmt(floor.depth)}       ${fmt(floor.gpu)}       ${fmt(floor.depthRaw)}`);
+    console.log(`  GPU detector vs audit: counts differ by ${parity} pixel(s) at most, over ${series.length} frames`);
+    const timed = (key) => series.map((row) => row[key]).filter((value) => value !== null);
+    const cost = {};
+    for (const [key, label] of [
+        ['cameraMotionMs', 'motion from depth'],
+        ['cutMs', 'cut detector'],
+    ]) {
+        const values = timed(key).sort((a, b) => a - b);
+        if (!values.length) continue;
+        cost[key] = { median: values[values.length >> 1], mean: values.reduce((a, b) => a + b, 0) / values.length, max: values[values.length - 1], frames: values.length };
+        console.log(`  ${label.padEnd(18)} GPU µs: median ${(1000 * cost[key].median).toFixed(1)}, mean ${(1000 * cost[key].mean).toFixed(1)}, max ${(1000 * cost[key].max).toFixed(1)} (${values.length} frames)`);
+    }
+    if (cli.check) return { thresholds: CUT_THRESHOLDS, events, floor, parity, cost, series };
 
     // Pictures per event: the frame before, the event frame, and where depth says "no motion reprojects".
     const shots = [];
@@ -464,7 +542,7 @@ async function cuts(run, screenshot) {
         }
         shots.push({ segment: row.segment, frame });
     }
-    return { thresholds: CUT_THRESHOLDS, events, floor, series, shots };
+    return { thresholds: CUT_THRESHOLDS, events, floor, parity, cost, series, shots };
 }
 
 async function probe(run, screenshot) {

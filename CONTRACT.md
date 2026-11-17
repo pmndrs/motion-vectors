@@ -1,8 +1,8 @@
 # Motion contract (draft)
 
-**Status: draft, 2026-11-14.** This is what every producer (an engine's velocity
-output, our three node, motion from depth) and every consumer (the upscaler, the
-denoiser, GI) agrees a motion vector means. It is checked by the motion lab's
+**Status: draft, 2026-11-17** (`.z` and `.w` specified). This is what every
+producer (an engine's velocity output, our three node, motion from depth) and
+every consumer (the upscaler, the denoiser, GI) agrees a motion vector means. It is checked by the motion lab's
 oracle (`lab/`, `scripts/measure-motion.mjs --check`). The open items at the end
 must be settled before the 0.x publish (gate P in [docs/PLAN.md](docs/PLAN.md)).
 
@@ -18,25 +18,76 @@ must be settled before the 0.x publish (gate P in [docs/PLAN.md](docs/PLAN.md)).
 | First frame / reset | Zero motion, never garbage. |
 | Format | `rgba16float` at render resolution, the same size as the colour and depth it describes. |
 | `.xy` | The motion. |
-| `.z` | Reserved: a confidence/source flag (exact geometric, depth-derived camera-only, rigid fallback, unknown). Consumers ignore it until it is specified. |
-| `.w` | Reserved: the previous linear depth. Consumers ignore it until it is specified. |
+| `.z` | The flag: where the motion comes from and how far to trust it ("Flag" below). |
+| `.w` | The previous linear depth ("Previous depth" below). |
+| Clear | A producer clears its target to 0, which reads as "no surface". |
+
+## Flag (`.z`)
+
+An exact small integer (exported as `MotionFlag`). Read it rounded:
+`round(texel.z)` in WGSL, `Math.round` on the CPU.
+
+| Value | Name | Meaning | `.xy` | `.w` |
+|---|---|---|---|---|
+| 0 | `NoSurface` | Nothing was drawn here: the cleared target, or the depth's clear value. | Producer-defined: 0 from a rasterizer, the far plane's camera motion from motion from depth | Producer-defined |
+| 1 | `Exact` | Geometric motion of the surface point: camera, object and deformation. | Exact | Exact |
+| 2 | `CameraOnly` | The camera's motion of a point assumed static. Any motion of its own is missing. Motion from depth, and pixi meshes the adapter doesn't track. | Exact if the point is static | Exact if the point is static |
+| 3 | `Rigid` | Camera and object motion. The deformation's own motion is missing: the deformed position stands in for both frames, so a deformation at rest reads no false motion. | Exact if the deformation is at rest | Same |
+| 4 | `NoPrevious` | The point had no previous position: it was behind the previous camera, wasn't drawn last frame, or this is the first frame after a reset or ever. | 0 | 0 |
+
+The order is by trust: only 1 means the motion is complete. Values above 4 are
+reserved, and a consumer treats an unknown value as 4.
+
+What a consumer does with it (guidance, not contract):
+
+- **0:** nothing to reproject. Treat it like the consumer's own background.
+- **1:** reproject normally.
+- **2, 3:** reproject, but distrust history more: tighten the rectification,
+  or lean on a depth or colour test.
+- **4:** no history. Reset the pixel, as for a disocclusion. A frame that is all
+  4 (after `reset()`) is a cut. A cut the app doesn't announce (a camera switch
+  with no `reset()`) shows up as surface pixels no motion can reproject:
+  `CutDetector` (`/webgpu`) turns that into a per-frame flag.
+
+## Previous depth (`.w`)
+
+The **linear depth** the surface point had in the **previous** frame: its
+distance along the previous camera's view axis, in world units (`−z` in view
+space, positive in front of the camera). It describes the point the motion
+points back to, as seen by the previous camera. Perspective or orthographic, it
+uses the same unit and has no depth-buffer convention (reversed, ortho, ranged)
+baked in.
+
+- **Why:** a consumer that keeps last frame's depth can test for disocclusion
+  without guessing. Linearize its stored depth at `previousUV` the same way, and
+  compare it with `.w`. If they agree, the history belongs to this surface point,
+  even under motion along the view axis that a current-depth test misreads
+  (a receding camera, an approaching object). `current depth − .w` is the
+  point's motion along the view axis.
+- **0** means "not available". It is always 0 with flag 4, and a producer that
+  can't compute it may leave it 0 with any flag (pixi-3d under an orthographic
+  camera: it keeps no previous view matrix). A consumer skips the depth test
+  where `.w ≤ 0`.
+- **Precision:** `rgba16float` keeps it within 2⁻¹¹ relative and up to 65504
+  world units. Scenes deeper than that need a scaled unit, which the producer
+  documents.
 
 ## Unknown motion
 
-A point with no previous position (it was behind the previous camera, or it
-spawned this frame) reports **0** and, once `.z` is specified, a flag. A producer
-that can't compute a deformation's previous position (texture- or
+A point with no previous position (it was behind the previous camera, it
+wasn't drawn last frame, or history was reset) reports **0** and flag 4. A
+producer that can't compute a deformation's previous position (texture- or
 storage-driven displacement, compute-written vertices) must not guess silently:
 it reports the rigid motion of the object (no false motion from the deformation
-itself, but none of its real motion either) and flags it.
+itself, but none of its real motion either) and flag 3.
 
 ## Per engine
 
 | Engine | Native convention | `motionScale` | Notes |
 |---|---|---|---|
 | three (WebGPU) | NDC current − previous, y up | `(0.5, −0.5)` | three's own `velocity` breaks the contract on deformation, on frame history and on jitter after a runtime switch; see "Conformance". |
-| raw WebGPU (motion from depth) | the contract | `(0.5, −0.5)` | Exact for static geometry; zero for object motion (to be flagged in `.z`). |
-| pixi-3d (WebGPU) | `velocityOutput`: UV delta current − previous, v along the texture rows, camera motion only, `rg16float` clamped to ±1 | `(0.5, −0.5)` for `@pmndrs/motion-vectors/pixi`'s `motionOutput`, which is the contract | The adapter adds object motion for tracked meshes and is exact on rigid motion within one f16 step ([docs/PIXI.md](docs/PIXI.md)). Skinning and morph report rigid motion; a second render of a camera in one frame reads no camera motion (pixi-3d's history is per render). |
+| raw WebGPU (motion from depth) | the contract | `(0.5, −0.5)` | Exact for static geometry; zero for object motion. Flags 2 on surfaces, 0 on the depth's clear value (with the far plane's camera motion in `.xy`, so a sky still reprojects), 4 on the first frame and behind the previous camera. |
+| pixi-3d (WebGPU) | `velocityOutput`: UV delta current − previous, v along the texture rows, camera motion only, `rg16float` clamped to ±1 | `(0.5, −0.5)` for `@pmndrs/motion-vectors/pixi`'s `motionOutput`, which is the contract | The adapter adds object motion for tracked meshes and is exact on rigid motion within one f16 step ([docs/PIXI.md](docs/PIXI.md)). Flags 1 on tracked meshes, 3 on tracked skinned or morphing ones, 2 elsewhere, 4 on a tracked mesh's first frame back. `.w` is exact under a perspective camera and 0 under an orthographic one. A second render of a camera in one frame reads no camera motion (pixi-3d's history is per render), and a camera's first frame reads flag 2 with zero motion, not 4: the adapter can't see pixi-3d's camera history. |
 | Babylon (WebGPU) | linear `0.5 · (previous − current)`, render targets Y-flipped | `(−1, −1)` | From the upscaler's [engine-contract.md](https://github.com/pmndrs/upscaler/blob/main/docs/engine-contract.md) and [babylon.md](https://github.com/pmndrs/upscaler/blob/main/docs/babylon.md). The audit has not been run on Babylon yet. |
 
 ## Conformance
@@ -56,6 +107,13 @@ A conforming producer, at 1280×720:
 - **Deformation:** below 0.01 px when the producer claims exact; flagged otherwise.
 - **Jitter:** zero on a still scene with jitter on, however the jitter was switched on.
 - **Frame history:** unchanged error with several renders per animation-loop tick.
+- **Flag:** no covered pixel claims no previous position where the oracle has
+  one, or the reverse. The one allowed exception is an object's first frame back
+  after it wasn't drawn: the oracle knows where it was, a producer that keeps
+  history per draw doesn't, and 4 is the honest answer.
+- **Previous depth:** where the flag claims a previous position (1–3), mean
+  relative `.w` error under 2⁻¹⁰ (two f16 rounding steps) against the oracle,
+  on every case where the motion itself is exact.
 
 What three's `velocity` reads against these (lab, 2026-11-14, r187; r186.1 where
 it differs): 3.2 px on a *static* displaced plane, 51.9 px while a `positionNode`
@@ -73,7 +131,10 @@ and is exact at one render per tick only (docs/MOTION.md §8).
 
 ## Open before 0.x
 
-- Specify `.z` (flag values) and `.w` (linear depth: view-space or the engine's own).
+- ~~Specify `.z` (flag values) and `.w` (linear depth: view-space or the
+  engine's own).~~ Settled 2026-11-17: the flag table and view-space previous
+  depth above. Every producer here writes both, and the lab and the pixi check
+  bar them.
 - ~~Whether "previous frame" is advanced by an explicit `beginFrame()` only, or
   also inferred when nothing drives it.~~ Both (three node): `beginFrame()`
   when called, three's frame counter otherwise. Several renders per frame need
