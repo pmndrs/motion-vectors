@@ -36,6 +36,7 @@ itself, but none of its real motion either) and flags it.
 |---|---|---|---|
 | three (WebGPU) | NDC current − previous, y up | `(0.5, −0.5)` | three's own `velocity` breaks the contract on deformation, on frame history and on jitter after a runtime switch; see "Conformance". |
 | raw WebGPU (motion from depth) | the contract | `(0.5, −0.5)` | Exact for static geometry; zero for object motion (to be flagged in `.z`). |
+| pixi-3d (WebGPU) | `velocityOutput`: UV delta current − previous, v along the texture rows, camera motion only, `rg16float` clamped to ±1 | `(0.5, −0.5)` for `@pmndrs/motion-vectors/pixi`'s `motionOutput`, which is the contract | The adapter adds object motion for tracked meshes and is exact on rigid motion within one f16 step ([docs/PIXI.md](docs/PIXI.md)). Skinning and morph report rigid motion; a second render of a camera in one frame reads no camera motion (pixi-3d's history is per render). |
 | Babylon (WebGPU) | linear `0.5 · (previous − current)`, render targets Y-flipped | `(−1, −1)` | From the upscaler's [engine-contract.md](https://github.com/pmndrs/upscaler/blob/main/docs/engine-contract.md) and [babylon.md](https://github.com/pmndrs/upscaler/blob/main/docs/babylon.md). The audit has not been run on Babylon yet. |
 
 ## Conformance

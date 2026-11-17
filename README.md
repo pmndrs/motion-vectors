@@ -45,6 +45,30 @@ renderer.setAnimationLoop(() => {
   outside a `Fn`, textures or storage buffers that change per frame
   (docs/MOTION.md §8).
 
+## pixi-3d (experimental)
+
+`@pixi/3d`'s own `velocityOutput` is camera motion only: a moving object reads
+zero. `MotionVectors` from `@pmndrs/motion-vectors/pixi` adds object motion for
+the meshes you track, in this package's contract.
+
+```ts
+import { MotionVectors, motionOutput } from '@pmndrs/motion-vectors/pixi';
+
+const motion = new MotionVectors();
+motion.track(car); // gives the mesh its own copy of its material
+app.ticker.add(() => {
+    car.position.x += 0.1;
+    motion.update(); // once per frame, before the view renders
+});
+// A pass that needs it: requiredOutputs = [motionOutput]; graph.getSceneOutput(motionOutput)
+```
+
+Rigid motion (translation, rotation, scale, parenting) is exact; skinning and
+morph targets report the mesh's rigid motion. `npm run check:pixi` checks it
+against analytic motion on the GPU. Why each tracked mesh needs its own material,
+and what pixi-3d could add to remove that, is in
+[docs/PIXI.md](docs/PIXI.md).
+
 ## Examples
 
 ```bash
@@ -55,6 +79,9 @@ npm run examples   # http://localhost:5612
   `MotionVectors` (right), as motion vectors, motion blur or colour. Pause it:
   the right half goes flat grey (zero motion), the left keeps reporting motion
   on every deformed object.
+- **pixi-compare**: one pixi-3d frame split at the middle, pixi-3d's
+  `velocityOutput` on the left and `MotionVectors` on the right. The sliding
+  box, spinning box and orbiting ball read as still on the left.
 
 ## The lab
 

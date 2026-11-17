@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { FrameHistory } from '../src/three/history.js';
+import { FrameHistory } from '../src/shared/history.js';
 
 // The node's history rules (PLAN R1/R4), on plain numbers: every draw in a
 // frame sees the value from the previous frame's draw, whatever the draw count.

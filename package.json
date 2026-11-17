@@ -13,22 +13,58 @@
     "bugs": {
         "url": "https://github.com/pmndrs/motion-vectors/issues"
     },
-    "keywords": ["webgpu", "wgsl", "motion-vectors", "velocity", "reprojection", "taa", "upscaling", "three", "threejs"],
+    "keywords": [
+        "webgpu",
+        "wgsl",
+        "motion-vectors",
+        "velocity",
+        "reprojection",
+        "taa",
+        "upscaling",
+        "three",
+        "threejs",
+        "pixi",
+        "pixijs"
+    ],
     "sideEffects": false,
-    "files": ["dist", "!dist/**/*.map", "CONTRACT.md"],
+    "files": [
+        "dist",
+        "!dist/**/*.map",
+        "CONTRACT.md"
+    ],
     "main": "./dist/index.js",
     "module": "./dist/index.js",
     "types": "./dist/index.d.ts",
     "exports": {
-        ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
-        "./webgpu": { "types": "./dist/webgpu/index.d.ts", "default": "./dist/webgpu/index.js" },
-        "./three": { "types": "./dist/three/index.d.ts", "default": "./dist/three/index.js" },
+        ".": {
+            "types": "./dist/index.d.ts",
+            "default": "./dist/index.js"
+        },
+        "./webgpu": {
+            "types": "./dist/webgpu/index.d.ts",
+            "default": "./dist/webgpu/index.js"
+        },
+        "./three": {
+            "types": "./dist/three/index.d.ts",
+            "default": "./dist/three/index.js"
+        },
+        "./pixi": {
+            "types": "./dist/pixi/index.d.ts",
+            "default": "./dist/pixi/index.js"
+        },
         "./package.json": "./package.json"
     },
     "typesVersions": {
         "*": {
-            "webgpu": ["./dist/webgpu/index.d.ts"],
-            "three": ["./dist/three/index.d.ts"]
+            "webgpu": [
+                "./dist/webgpu/index.d.ts"
+            ],
+            "three": [
+                "./dist/three/index.d.ts"
+            ],
+            "pixi": [
+                "./dist/pixi/index.d.ts"
+            ]
         }
     },
     "scripts": {
@@ -42,17 +78,30 @@
         "build:examples": "vite build --config examples/vite.config.ts --outDir ../examples-dist --emptyOutDir",
         "measure": "node scripts/measure-motion.mjs",
         "check:gpu": "node scripts/measure-motion.mjs --experiments oracle,cases,jitter,node --check",
-        "verify:pack": "node scripts/verify-pack.mjs"
+        "verify:pack": "node scripts/verify-pack.mjs",
+        "check:pixi": "node scripts/check-pixi.mjs"
     },
     "peerDependencies": {
-        "three": ">=0.184.0"
+        "three": ">=0.184.0",
+        "@pixi/3d": ">=0.1.0",
+        "pixi.js": "^8.23.0"
     },
     "peerDependenciesMeta": {
-        "three": { "optional": true }
+        "three": {
+            "optional": true
+        },
+        "@pixi/3d": {
+            "optional": true
+        },
+        "pixi.js": {
+            "optional": true
+        }
     },
     "devDependencies": {
+        "@pixi/3d": "0.1.0",
         "@types/three": "0.187.0",
         "@webgpu/types": "^0.1.64",
+        "pixi.js": "8.23.0",
         "three": "0.187.0",
         "typescript": "^5.7.0",
         "vite": "^6.1.0",

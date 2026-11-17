@@ -16,6 +16,7 @@ npm run examples    # example gallery, Vite, :5612 (imports the package by name 
 npm run lab         # Vite, :5611
 npm run measure     # every lab experiment on the real GPU (headless Chrome + CDP)
 npm run check:gpu   # conformance bars; CI runs it with --adapter swiftshader --width 640 --height 360
+npm run check:pixi  # pixi-3d adapter vs analytic motion (examples/pixi-compare?check=1); CI runs it on SwiftShader
 ```
 
 ## Rules
@@ -55,3 +56,14 @@ npm run check:gpu   # conformance bars; CI runs it with --adapter swiftshader --
 9. **Headless Linux Chrome can't present a WebGPU canvas on SwiftShader**
    (no swapchain shared image; the instance is lost at the first present). CI
    runs the lab with `?present=0`; every check reads GPU buffers, not pixels.
+   The pixi check renders into a `RenderTexture` for the same reason, and never
+   passes pixi's `resizeTo`: that option renders to the canvas inside
+   `app.init()`. In check mode any canvas present throws, so a Mac run catches it.
+10. **Metal's f32 → f16 render-target conversion doesn't round to nearest.** An
+    exact motion reads up to one f16 step off (0.02 px at 28 px of motion);
+    pixi-3d's own exact camera velocity shows the same step. Compare stored
+    `rgba16float` values with a one-step allowance, not a flat 0.01 px.
+11. **pixi-3d scene-output bits can't declare `bindings.material`** (it throws),
+    so per-mesh data reaches a bit only through a material bit on that mesh.
+    The adapter's two bits share private vertex variables through a
+    `requires`-deduplicated header bit (`pmndrsMotionState`).

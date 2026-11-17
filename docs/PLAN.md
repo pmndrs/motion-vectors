@@ -1,6 +1,8 @@
 # Motion vectors — spec and plan
 
-**Status (2026-11-14): Phase 2 (three node) in progress; D1 passed.** Phases 0
+**Status (2026-11-15): Phase 2 (three node) in progress; D1 passed; pixi-3d
+adapter built (experimental, [PIXI.md](PIXI.md)); cut detectors compared
+(MOTION.md §7).** Phases 0
 and 1 ran incubating in [pmndrs/upscaler](https://github.com/pmndrs/upscaler);
 this repo took them over with their history and builds on three **r187**. The
 node meets every §4 oracle case (MOTION.md §8). It will
@@ -253,6 +255,10 @@ outside a Fn, per-frame textures and storage (R7/R8).
   noise). Open: R3 lab cases (skinned, instanced, batched), R7 author hook,
   R8 flag, R12 per-case feature detection.
 - Settle the reserved channels.
+- `/pixi` (experimental, added 2026-11-15): camera motion plus object motion for
+  tracked meshes as a pixi-3d scene output, exact on rigid motion within one
+  f16 step (`npm run check:pixi`, [PIXI.md](PIXI.md)). Skinning and morph report
+  rigid motion until pixi-3d keeps previous bones and weights (PIXI.md, ask 2).
 
 **Exit:** every §4 case meets its oracle; the carried-over pass bars hold; the R11 cost is measured.
 
@@ -320,6 +326,8 @@ ships from there.
 | 2026-11-14 | Phase 1 done: lab self-contained under `packages/motion`, exact oracle, contract draft | Done |
 | 2026-11-14 | Extracted to pmndrs/motion-vectors with history; three r187 is the development baseline | Done (push pending) |
 | 2026-11-14 | Cut detection keys on depth consistency; the histogram is the depth-less fallback | Proposed (measured, MOTION.md §7) |
+| 2026-11-15 | Cut detectors A/B'd on 14 events: depth share (surface only, background excluded) 13/14 at 0.2, histogram 8/14 | Awaiting maintainer review |
+| 2026-11-15 | pixi-3d adapter on the public API (material field per tracked mesh); engine-side asks drafted in PIXI.md | Built, experimental; asks not filed |
 | 2026-11-14 | D1: `positionNode` previous is feasible (graph rebuilt with substituted leaves) | Done (MOTION.md §8) |
 | — | P: publish 0.x | Pending (review by 2026-12-15, proposed) |
 | — | D3: optical flow | Pending (Phase 5) |
