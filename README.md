@@ -15,8 +15,8 @@ must mean and measures any source against it.
   semantics, unknowns) and the conformance bars.
 - **`@pmndrs/motion-vectors`**: contract constants and CPU reference math.
 - **`@pmndrs/motion-vectors/webgpu`**: engine-free GPU passes on a bare
-  `GPUDevice`: camera motion from depth, a warp-residual audit, an exact
-  oracle comparison, luma histograms.
+  `GPUDevice`: camera motion from depth, cut detection, a warp-residual audit,
+  an exact oracle comparison, luma histograms.
 - **`@pmndrs/motion-vectors/three`**: a drop-in `velocity` for three.js
   `WebGPURenderer` that is exact where three's is not: `positionNode`
   deformation, morph targets, `displacementMap`, several renders per frame
@@ -49,6 +49,38 @@ renderer.setAnimationLoop(() => {
   previous position automatically. Not covered yet: `toVar()` variables made
   outside a `Fn`, textures or storage buffers that change per frame
   (docs/MOTION.md §8).
+
+## Cut detection (raw WebGPU)
+
+`CutDetector` tells a temporal pass when its history stopped being valid: a
+camera cut, a teleport, a scene switch. It runs on the GPU with no readback and
+writes a 1×1 `rgba16float` flag the consumer reads in the same frame (`r` = 1:
+reset history).
+
+```ts
+import { CutDetector, MotionFromDepth } from '@pmndrs/motion-vectors/webgpu';
+
+const fromDepth = new MotionFromDepth(device);
+const cuts = new CutDetector(device);
+await Promise.all([fromDepth.init(), cuts.init()]);
+fromDepth.configure(width, height);
+
+// Per frame, after the scene render:
+fromDepth.encode(encoder, depthTexture, { viewProjection, inverseViewProjectionJittered, view });
+cuts.encode(encoder, fromDepth, { motions: [velocityTexture] }); // velocity is optional
+fromDepth.endFrame();
+// Your temporal pass binds cuts.flag.gpu and resets where .r is 1.
+```
+
+The signal is the share of surface pixels no motion (zero, camera, the
+engine's velocity) maps onto a matching previous depth. Lighting changes,
+fades and flashes don't touch depth, so they never fire; on the lab's 14-event
+cut timeline it fires on every cut whose history is really gone and on nothing
+else ([docs/MOTION.md](docs/MOTION.md) §9). It needs depth: inputs without it
+fall back to the luma histogram (`jensenShannon`, `earthMovers`). Both passes
+take an allocator, so a three app gets three textures
+(`createThreeTextureAllocator`). `cuts.read()` reads the verdict back if you
+reset on the CPU instead.
 
 ## pixi-3d (experimental)
 

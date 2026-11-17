@@ -1,6 +1,6 @@
 import { createDeviceTextureAllocator, type MotionTexture, type TextureAllocator } from './textures.js';
 
-import { CAMERA_MOTION_SHADER, MOTION_CONSTANTS_BYTES } from './shaders/cameraMotion.js';
+import { MotionFromDepth, type CameraMatrices } from './MotionFromDepth.js';
 import { HISTOGRAM_BINS, LUMA_HISTOGRAM_SHADER } from './shaders/lumaHistogram.js';
 import {
     COMPARE_CANDIDATE_WORDS,
@@ -31,19 +31,7 @@ export const RESIDUAL_SLOTS = 8;
 /** Histogram slots per frame. */
 export const HISTOGRAM_SLOTS = 4;
 
-/**
- * Camera matrices for one frame, column-major (three's `Matrix4.elements`).
- * `inverseViewProjectionJittered` must invert the projection the depth was
- * rasterized with; `viewProjection` must be the unjittered one, so the derived
- * motion is jitter-free like three's `velocity` node.
- */
-export interface CameraMatrices {
-    viewProjection: ArrayLike<number>;
-    inverseViewProjectionJittered: ArrayLike<number>;
-    view: ArrayLike<number>;
-    /** The depth buffer's clear value: 1 (default), or 0 for reversed depth. Marks background pixels. */
-    backgroundDepth?: number;
-}
+export type { CameraMatrices };
 
 /** One candidate's warp statistics for a residual slot. */
 export interface CandidateStats {
@@ -153,26 +141,18 @@ export class MotionAnalyzer<THandle = GPUTexture> {
     readonly device: GPUDevice;
 
     private readonly _allocate: TextureAllocator<THandle>;
-    private _cameraPipeline: GPUComputePipeline | null = null;
     private _residualPipeline: GPUComputePipeline | null = null;
     private _histogramPipeline: GPUComputePipeline | null = null;
     private _comparePipeline: GPUComputePipeline | null = null;
     private readonly _compareConstants: GPUBuffer;
     private _usedCompare = false;
     private readonly _sampler: GPUSampler;
-    private readonly _motionConstants: GPUBuffer;
     private readonly _residualConstants: GPUBuffer[];
     private readonly _histogramConstants: GPUBuffer[];
     private readonly _stats: GPUBuffer;
     private readonly _readback: GPUBuffer;
-    private _width = 0;
-    private _height = 0;
-    private _cameraMotion: MotionTexture<THandle> | null = null;
-    private _linearDepth: GPUTexture[] = [];
-    private _depthIndex = 0;
-    private _hasPrevious = false;
-    private _prevViewProjection = new Float32Array(16);
-    private _prevViewZRow = new Float32Array(4);
+    /** Camera motion from depth: the analyzer's static-world expectation and depth history. */
+    readonly fromDepth: MotionFromDepth<THandle>;
     private readonly _snapshots = new Map<string, GPUTexture>();
     private readonly _debug = new Map<string, MotionTexture<THandle>>();
     private readonly _dummy: GPUTexture;
@@ -187,11 +167,7 @@ export class MotionAnalyzer<THandle = GPUTexture> {
         this.device = device;
         this._allocate = allocate ?? (createDeviceTextureAllocator(device) as unknown as TextureAllocator<THandle>);
         this._sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
-        this._motionConstants = device.createBuffer({
-            label: 'motion-camera-constants',
-            size: MOTION_CONSTANTS_BYTES,
-            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-        });
+        this.fromDepth = new MotionFromDepth(device, this._allocate);
         // One uniform buffer per slot: queue writes land before the whole
         // submit, so slots sharing a buffer would all see the last write.
         this._residualConstants = Array.from({ length: RESIDUAL_SLOTS }, (_, slot) =>
@@ -240,23 +216,22 @@ export class MotionAnalyzer<THandle = GPUTexture> {
                 layout: 'auto',
                 compute: { module: this.device.createShaderModule({ label, code }), entryPoint: 'main' },
             });
-        [this._cameraPipeline, this._residualPipeline, this._histogramPipeline, this._comparePipeline] = await Promise.all([
-            compile('motion-camera', CAMERA_MOTION_SHADER),
+        [this._residualPipeline, this._histogramPipeline, this._comparePipeline] = await Promise.all([
             compile('motion-residual', MOTION_RESIDUAL_SHADER),
             compile('motion-histogram', LUMA_HISTOGRAM_SHADER),
             compile('motion-compare', MOTION_COMPARE_SHADER),
+            this.fromDepth.init(),
         ]);
     }
 
     /** Camera motion at render resolution (rgba16float; see `cameraMotion.ts`). */
     get cameraMotion(): MotionTexture<THandle> {
-        if (!this._cameraMotion) throw new Error('MotionAnalyzer: configure() first.');
-        return this._cameraMotion;
+        return this.fromDepth.motion;
     }
 
     /** This frame's linear depth (r32float, render resolution). */
     get linearDepth(): GPUTexture {
-        return this._linearDepth[this._depthIndex];
+        return this.fromDepth.linearDepth;
     }
 
     /**
@@ -265,26 +240,14 @@ export class MotionAnalyzer<THandle = GPUTexture> {
      * @param height - Render height
      */
     configure(width: number, height: number): void {
-        if (width === this._width && height === this._height && this._cameraMotion) return;
-        this._width = width;
-        this._height = height;
-        this._cameraMotion?.destroy();
-        for (const texture of this._linearDepth) texture.destroy();
-        this._cameraMotion = this._allocate({ label: 'motion-camera', width, height, format: 'rgba16float' });
-        this._linearDepth = [0, 1].map((index) =>
-            this.device.createTexture({
-                label: `motion-linear-depth-${index}`,
-                size: { width, height },
-                format: 'r32float',
-                usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING,
-            }),
-        );
+        if (width === this.fromDepth.width && height === this.fromDepth.height) return;
+        this.fromDepth.configure(width, height);
         this.reset();
     }
 
     /** Forgets previous frames (camera matrices, depth, snapshots). */
     reset(): void {
-        this._hasPrevious = false;
+        this.fromDepth.reset();
         for (const texture of this._snapshots.values()) texture.destroy();
         this._snapshots.clear();
     }
@@ -307,7 +270,7 @@ export class MotionAnalyzer<THandle = GPUTexture> {
 
     /** True once a previous frame's depth and matrices exist. */
     get hasPrevious(): boolean {
-        return this._hasPrevious;
+        return this.fromDepth.hasPrevious;
     }
 
     /**
@@ -335,43 +298,10 @@ export class MotionAnalyzer<THandle = GPUTexture> {
      * @param encoder - Command encoder
      * @param depth - Render-res depth (any depth format)
      * @param matrices - This frame's camera matrices
+     * @param timestampWrites - GPU timestamps around the pass
      */
-    encodeCameraMotion(encoder: GPUCommandEncoder, depth: GPUTexture, matrices: CameraMatrices): void {
-        const pipeline = this._ready(this._cameraPipeline);
-        const data = new Float32Array(MOTION_CONSTANTS_BYTES / 4);
-        const viewZRow = [matrices.view[2], matrices.view[6], matrices.view[10], matrices.view[14]];
-        data.set(Array.from(matrices.inverseViewProjectionJittered), 0);
-        data.set(Array.from(matrices.viewProjection), 16);
-        // First frame: previous = current, so the motion is zero, not garbage.
-        data.set(this._hasPrevious ? this._prevViewProjection : Array.from(matrices.viewProjection), 32);
-        data.set(viewZRow, 48);
-        data.set(this._hasPrevious ? this._prevViewZRow : viewZRow, 52);
-        data.set([this._width, this._height, 1 / this._width, 1 / this._height], 56);
-        data[60] = matrices.backgroundDepth ?? 1;
-        data[61] = this._hasPrevious ? 1 : 0;
-        this.device.queue.writeBuffer(this._motionConstants, 0, data);
-        this._prevViewProjection.set(Array.from(matrices.viewProjection));
-        this._prevViewZRow.set(viewZRow);
-
-        const depthView = depth.createView({
-            aspect: depth.format.includes('stencil') ? 'depth-only' : 'all',
-            baseMipLevel: 0,
-            mipLevelCount: 1,
-        });
-        const bindGroup = this.device.createBindGroup({
-            layout: pipeline.getBindGroupLayout(0),
-            entries: [
-                { binding: 0, resource: { buffer: this._motionConstants } },
-                { binding: 1, resource: depthView },
-                { binding: 2, resource: this.cameraMotion.gpu.createView() },
-                { binding: 3, resource: this.linearDepth.createView() },
-            ],
-        });
-        const pass = encoder.beginComputePass({ label: 'motion-camera' });
-        pass.setPipeline(pipeline);
-        pass.setBindGroup(0, bindGroup);
-        pass.dispatchWorkgroups(Math.ceil(this._width / 8), Math.ceil(this._height / 8));
-        pass.end();
+    encodeCameraMotion(encoder: GPUCommandEncoder, depth: GPUTexture, matrices: CameraMatrices, timestampWrites?: GPUComputePassTimestampWrites): void {
+        this.fromDepth.encode(encoder, depth, matrices, timestampWrites);
     }
 
     /**
@@ -385,7 +315,8 @@ export class MotionAnalyzer<THandle = GPUTexture> {
         const motions = request.motions ?? [];
         if (motions.length > MAX_CANDIDATES - 1) throw new Error('At most three motion candidates.');
         const depthTest = request.depthTest ?? true;
-        if (depthTest && !this._hasPrevious) return;
+        const previousDepth = this.fromDepth.previousLinearDepth;
+        if (depthTest && !previousDepth) return;
         const { width, height } = request.current;
         const motionSize = motions[0] ? [motions[0].width, motions[0].height] : [width, height];
         for (const motion of motions)
@@ -395,7 +326,7 @@ export class MotionAnalyzer<THandle = GPUTexture> {
         const buffer = new ArrayBuffer(RESIDUAL_CONSTANTS_BYTES);
         const f32 = new Float32Array(buffer);
         const u32 = new Uint32Array(buffer);
-        f32.set([width, height, 1 / width, 1 / height, motionSize[0], motionSize[1], this._width, this._height]);
+        f32.set([width, height, 1 / width, 1 / height, motionSize[0], motionSize[1], this.fromDepth.width, this.fromDepth.height]);
         f32[8] = request.depthTolerance ?? 0.05;
         f32[9] = request.threshold ?? 0.02;
         u32[10] = motions.length;
@@ -420,7 +351,8 @@ export class MotionAnalyzer<THandle = GPUTexture> {
                 { binding: 5, resource: view(motions[1]) },
                 { binding: 6, resource: view(motions[2]) },
                 { binding: 7, resource: this.cameraMotion.gpu.createView() },
-                { binding: 8, resource: this._linearDepth[1 - this._depthIndex].createView() },
+                // Without a previous frame (depth test off) any r32float binds; the pass doesn't read it.
+                { binding: 8, resource: (previousDepth ?? this.fromDepth.linearDepth).createView() },
                 { binding: 9, resource: debug.gpu.createView() },
                 { binding: 10, resource: { buffer: this._stats } },
             ],
@@ -524,8 +456,7 @@ export class MotionAnalyzer<THandle = GPUTexture> {
 
     /** Flips the depth history; call after the frame's last encode. */
     endFrame(): void {
-        this._depthIndex = 1 - this._depthIndex;
-        this._hasPrevious = true;
+        this.fromDepth.endFrame();
     }
 
     /**
@@ -544,21 +475,19 @@ export class MotionAnalyzer<THandle = GPUTexture> {
 
     /** Releases every GPU resource. */
     dispose(): void {
-        this._cameraMotion?.destroy();
-        for (const texture of this._linearDepth) texture.destroy();
+        this.fromDepth.dispose();
         for (const texture of this._snapshots.values()) texture.destroy();
         for (const texture of this._debug.values()) texture.destroy();
         this._dummy.destroy();
         this._stats.destroy();
         this._readback.destroy();
-        this._motionConstants.destroy();
         this._compareConstants.destroy();
         for (const buffer of [...this._residualConstants, ...this._histogramConstants]) buffer.destroy();
     }
 
     private _ready(pipeline: GPUComputePipeline | null): GPUComputePipeline {
         if (!pipeline) throw new Error('MotionAnalyzer: await init() first.');
-        if (!this._cameraMotion) throw new Error('MotionAnalyzer: configure() first.');
+        if (!this.fromDepth.width) throw new Error('MotionAnalyzer: configure() first.');
         return pipeline;
     }
 }

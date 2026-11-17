@@ -1,11 +1,14 @@
 /**
  * `@pmndrs/motion-vectors/webgpu`: the engine-free products on a bare
- * `GPUDevice` (camera motion from depth, the warp-residual audit, the oracle
- * comparison, luma histograms). Contract: CONTRACT.md.
+ * `GPUDevice` (camera motion from depth, cut detection, the warp-residual
+ * audit, the oracle comparison, luma histograms). Contract: CONTRACT.md.
  */
 export { MotionAnalyzer, decodeCompare, decodeStats, RESIDUAL_SLOTS, HISTOGRAM_SLOTS } from './MotionAnalyzer.js';
+export { MotionFromDepth } from './MotionFromDepth.js';
+export type { CameraMatrices } from './MotionFromDepth.js';
+export { CutDetector, decodeCutResult } from './CutDetector.js';
+export type { CutRequest, CutResult } from './CutDetector.js';
 export type {
-    CameraMatrices,
     CandidateStats,
     CompareCandidateStats,
     CompareObjectStats,

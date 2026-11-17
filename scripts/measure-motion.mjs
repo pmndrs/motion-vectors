@@ -18,7 +18,10 @@
  * - track: per segment, the new bar (Q19's motion types in the lab's scene).
  * - cuts: the two cut detectors side by side (luma histogram EMD vs the
  *   depth-consistency share) on cuts and on the events that must not fire,
- *   with before / at / depth-map pictures per event.
+ *   with before / at / depth-map pictures per event, plus the GPU detector
+ *   (`CutDetector`): its counts must equal the audit's pixel for pixel, its
+ *   verdict must fire on every cut but the sky shot and on nothing else, and
+ *   its cost (and motion from depth's) is timed where timestamps exist.
  * - probe: one --request (or an array), prints per-object errors.
  *
  * Usage:
@@ -423,6 +426,8 @@ const CUT_EVENTS = {
 };
 /** Thresholds the comparison is read at (EMD: Phase 0's, fit on Q10). */
 const CUT_THRESHOLDS = { emd: 0.5, depth: 0.2 };
+/** The one cut whose history stays valid (MOTION.md §7): the detector rightly keeps it. */
+const CUT_KEEPS_HISTORY = new Set(['cut-sky']);
 
 async function cuts(run, screenshot) {
     const result = await run({ scene: 'cuts' });
@@ -435,6 +440,15 @@ async function cuts(run, screenshot) {
         // shot was off-screen in the old camera. Under 5 % surface: no verdict.
         const surface = 1 - background;
         const inconsistent = depth ? depth.noneValid - depth.backgroundUnscored : 0;
+        // The GPU detector's counts against the audit's, in pixels (shares × pixels are integers).
+        const gpu = frame.cutGpu;
+        const parity =
+            depth && gpu
+                ? Math.max(
+                      Math.abs(Math.round(inconsistent * depth.pixels) - gpu.inconsistentPixels),
+                      Math.abs(Math.round(surface * depth.pixels) - gpu.surfacePixels),
+                  )
+                : null;
         return {
             frame: frame.frame,
             segment: frame.segment,
@@ -445,6 +459,11 @@ async function cuts(run, screenshot) {
             entering,
             background,
             depth: depth && surface >= 0.05 ? inconsistent / surface : null,
+            gpu: gpu?.share ?? null,
+            gpuCut: gpu?.cut ?? null,
+            parity,
+            cameraMotionMs: frame.cameraMotionMs ?? null,
+            cutMs: frame.cutMs ?? null,
         };
     });
     const max = (rows, key) => Math.max(0, ...rows.map((row) => row[key] ?? 0));
@@ -457,6 +476,7 @@ async function cuts(run, screenshot) {
         const judged = info.cut ? rows.filter((row) => row.cut) : rows;
         const peak = (key) => judged.reduce((best, row) => ((row[key] ?? -1) > (best?.[key] ?? -1) ? row : best), null);
         const at = peak('depth');
+        const gpuCut = judged.some((row) => row.gpuCut === true);
         events.push({
             segment: segment.name,
             ...info,
@@ -469,18 +489,44 @@ async function cuts(run, screenshot) {
             background: max(judged, 'background'),
             emdFrame: peak('emd')?.frame,
             depthFrame: at?.frame,
+            gpu: max(judged, 'gpu'),
+            gpuCut,
         });
+        // --check bars: a cut fires on its cut frame (but the sky shot, whose history stays valid); nothing else fires.
+        const expected = info.cut && !CUT_KEEPS_HISTORY.has(segment.name);
+        if (gpuCut !== expected) failures.push(`cut detector: ${info.label} ${gpuCut ? 'fired' : 'missed'} (GPU share ${max(judged, 'gpu').toFixed(3)})`);
     }
     // Holds after cuts and the plain holds: the steady-state floor of each signal.
     const quiet = series.filter((row) => !CUT_EVENTS[row.segment] || (CUT_EVENTS[row.segment].cut && !row.cut));
-    const floor = { emd: max(quiet, 'emd'), depth: max(quiet, 'depth'), depthRaw: max(quiet, 'depthRaw') };
+    const floor = { emd: max(quiet, 'emd'), depth: max(quiet, 'depth'), depthRaw: max(quiet, 'depthRaw'), gpu: max(quiet, 'gpu') };
+    const quietFires = quiet.filter((row) => row.gpuCut === true).map((row) => row.frame);
+    if (quietFires.length) failures.push(`cut detector: fired on quiet frame(s) ${quietFires.join(', ')}`);
+    const parity = Math.max(0, ...series.map((row) => row.parity ?? 0));
+    if (series.some((row) => row.parity === null)) failures.push('cut detector: a measured frame has no GPU verdict');
+    if (parity !== 0) failures.push(`cut detector: counts differ from the audit's by up to ${parity} pixel(s)`);
     const verdict = (value, threshold, cut) => (value > threshold ? (cut ? 'hit' : 'FALSE') : cut ? 'MISS' : 'ok');
-    console.log(`  ${'event'.padEnd(36)} ${'EMD'.padStart(8)}       ${'depth'.padStart(8)}       ${'raw'.padStart(8)} ${'enter'.padStart(8)} ${'bg'.padStart(8)}`);
+    const gpuVerdict = (row) => (row.gpuCut ? (row.cut ? 'hit' : 'FALSE') : row.cut ? (CUT_KEEPS_HISTORY.has(row.segment) ? 'keep' : 'MISS') : 'ok');
+    console.log(
+        `  ${'event'.padEnd(36)} ${'EMD'.padStart(8)}       ${'depth'.padStart(8)}       ${'GPU'.padStart(8)}       ${'raw'.padStart(8)} ${'enter'.padStart(8)} ${'bg'.padStart(8)}`,
+    );
     for (const row of events)
         console.log(
-            `  ${row.label.padEnd(36)} ${fmt(row.emd)} ${verdict(row.emd, CUT_THRESHOLDS.emd, row.cut).padEnd(5)} ${fmt(row.depth)} ${verdict(row.depth, CUT_THRESHOLDS.depth, row.cut).padEnd(5)} ${fmt(row.depthRaw)} ${fmt(row.entering)} ${fmt(row.background)}`,
+            `  ${row.label.padEnd(36)} ${fmt(row.emd)} ${verdict(row.emd, CUT_THRESHOLDS.emd, row.cut).padEnd(5)} ${fmt(row.depth)} ${verdict(row.depth, CUT_THRESHOLDS.depth, row.cut).padEnd(5)} ${fmt(row.gpu)} ${gpuVerdict(row).padEnd(5)} ${fmt(row.depthRaw)} ${fmt(row.entering)} ${fmt(row.background)}`,
         );
-    console.log(`  ${'quiet frames (max)'.padEnd(36)} ${fmt(floor.emd)}       ${fmt(floor.depth)}       ${fmt(floor.depthRaw)}`);
+    console.log(`  ${'quiet frames (max)'.padEnd(36)} ${fmt(floor.emd)}       ${fmt(floor.depth)}       ${fmt(floor.gpu)}       ${fmt(floor.depthRaw)}`);
+    console.log(`  GPU detector vs audit: counts differ by ${parity} pixel(s) at most, over ${series.length} frames`);
+    const timed = (key) => series.map((row) => row[key]).filter((value) => value !== null);
+    const cost = {};
+    for (const [key, label] of [
+        ['cameraMotionMs', 'motion from depth'],
+        ['cutMs', 'cut detector'],
+    ]) {
+        const values = timed(key).sort((a, b) => a - b);
+        if (!values.length) continue;
+        cost[key] = { median: values[values.length >> 1], mean: values.reduce((a, b) => a + b, 0) / values.length, max: values[values.length - 1], frames: values.length };
+        console.log(`  ${label.padEnd(18)} GPU µs: median ${(1000 * cost[key].median).toFixed(1)}, mean ${(1000 * cost[key].mean).toFixed(1)}, max ${(1000 * cost[key].max).toFixed(1)} (${values.length} frames)`);
+    }
+    if (cli.check) return { thresholds: CUT_THRESHOLDS, events, floor, parity, cost, series };
 
     // Pictures per event: the frame before, the event frame, and where depth says "no motion reprojects".
     const shots = [];
@@ -496,7 +542,7 @@ async function cuts(run, screenshot) {
         }
         shots.push({ segment: row.segment, frame });
     }
-    return { thresholds: CUT_THRESHOLDS, events, floor, series, shots };
+    return { thresholds: CUT_THRESHOLDS, events, floor, parity, cost, series, shots };
 }
 
 async function probe(run, screenshot) {

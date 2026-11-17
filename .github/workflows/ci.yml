@@ -37,11 +37,12 @@ jobs:
     name: conformance (SwiftShader, ${{ matrix.experiments }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Two shards in parallel: the oracle's full camera track alone is ~11 min on SwiftShader.
+    # Shards in parallel: the oracle's full camera track alone is ~11 min on SwiftShader.
+    # `cuts` checks the GPU cut detector against the audit and the cut timeline's truth.
     strategy:
       fail-fast: false
       matrix:
-        experiments: [oracle, 'cases,jitter,node']
+        experiments: [oracle, 'cases,jitter,node', cuts]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

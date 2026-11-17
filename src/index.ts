@@ -12,6 +12,8 @@
 export const MOTION_SCALE: readonly [number, number] = [0.5, -0.5];
 
 export { MotionFlag } from './flags.js';
+export { CUT_DEPTH_TOLERANCE, CUT_MIN_SURFACE, CUT_THRESHOLD, cutVerdict } from './math/cut.js';
+export type { CutOptions, CutVerdict } from './math/cut.js';
 export { earthMovers, jensenShannon } from './math/histogram.js';
 export { cameraMotionAt } from './math/reprojection.js';
 export type { CameraMotionSample } from './math/reprojection.js';

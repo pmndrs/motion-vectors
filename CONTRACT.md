@@ -45,7 +45,9 @@ What a consumer does with it (guidance, not contract):
 - **2, 3:** reproject, but distrust history more: tighten the rectification,
   or lean on a depth or colour test.
 - **4:** no history. Reset the pixel, as for a disocclusion. A frame that is all
-  4 (after `reset()`) is a cut.
+  4 (after `reset()`) is a cut. A cut the app doesn't announce (a camera switch
+  with no `reset()`) shows up as surface pixels no motion can reproject:
+  `CutDetector` (`/webgpu`) turns that into a per-frame flag.
 
 ## Previous depth (`.w`)
 
