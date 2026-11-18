@@ -13,7 +13,9 @@ reference fix.
 | three.js | `velocity` reports vertex deformation as motion (`positionNode`, morph, `displacementMap`); upstream candidate #17 | [three.md](three.md) §1 | Drafted |
 | three.js | `velocity` camera history per display refresh, not per render; upstream candidate #18 (r187 fixed its projection half) | [three.md](three.md) §2 | Drafted |
 | pixi-3d | `velocityOutput` asks (object motion, deformation, per-frame history, …) | — | Filed: pixijs/3d#50–54 |
-| Babylon.js | Audit of its velocity on the deformers scene | — | Not run yet (Phase 4) |
+| Babylon.js | Skinned meshes lose bone motion under bone textures (the WebGPU default) | [babylon.md](babylon.md) §1 | Drafted |
+| Babylon.js | Object history per engine frame, and stale after frames not drawn | [babylon.md](babylon.md) §2 | Drafted |
+| Babylon.js | Deformation motion (morph targets, vertex code) never in velocity (feature request) | [babylon.md](babylon.md) §3 | Drafted |
 
 Numbers in the drafts come from docs/MOTION.md. Before filing, re-run the lab
 on the engine's current release and update them.

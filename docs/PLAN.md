@@ -1,10 +1,13 @@
 # Motion vectors — spec and plan
 
-**Status (2026-11-19): Phase 2 (three node) done; D1 passed; the
-contract's `.z`/`.w` settled; pixi-3d adapter built (experimental,
-[PIXI.md](PIXI.md)); Phase 3 done: cut detection on the GPU keyed on depth
-consistency, motion from depth for three, warping error (MOTION.md §9). Left
-before 0.1.0: the Babylon audit (Phase 4) and release setup. Supported:
+**Status (2026-11-19): every phase before 0.1.0 is done, and gate P's checks
+hold. Phase 2 (three node) done; D1 passed; the contract's `.z`/`.w` settled;
+pixi-3d adapter built (experimental, [PIXI.md](PIXI.md)); Phase 3 done: cut
+detection on the GPU keyed on depth consistency, motion from depth for three,
+warping error (MOTION.md §9); Phase 4 done: the upscaler dry run and the
+Babylon audit (MOTION.md §10, §11). The release setup is in place (version
+0.1.0, a manual Release workflow). What's left is the maintainer's: make the
+repo public, give the workflow npm access, and run it (gate P). Supported:
 three `>=0.186.0`. Upstream issues are filed after 0.1.0 (Phase 5).** Phases 0
 and 1 ran incubating in [pmndrs/upscaler](https://github.com/pmndrs/upscaler);
 this repo took them over with their history and builds on three **r187**. The
@@ -159,7 +162,7 @@ flow pyramids) adds it.
 |---|---|
 | `/three` | The §3.2 node; `MotionFromDepthPass` (motion from depth + cut detection from a three depth texture and camera); helpers to allocate published textures as three textures. |
 | `/webgpu` | No engine: motion from depth plus the contract; the app supplies matrices. |
-| `/babylon` | Babylon has its own velocity; run the same audit before wrapping or fixing anything. |
+| `/babylon` | Babylon has its own velocity; audited 2026-11-19 (MOTION.md §11): exact on camera and rigid motion and never reports deformation as motion. It misses deformation motion and, under bone textures (the WebGPU default), skinning. Its object history is per engine frame and goes stale on a mesh not drawn last frame. A first adapter would add those, not camera or rigid motion. |
 | `/pixi` | 2D usually has no depth, so the first version is app-supplied motion in the contract format. Optical flow is the long-term answer (D3). |
 
 ## 4. Acceptance harness
@@ -203,7 +206,7 @@ docs/                 MOTION.md (findings), PLAN.md (this plan)
 ```
 
 - npm, `tsc` to `dist/` (ESM, `.js` specifiers), no runtime dependencies;
-  `three` an optional peer (≥ 0.184), pinned to 0.187.0 for development.
+  `three` an optional peer (≥ 0.186.0 since Phase 2), pinned to 0.187.0 for development.
 - CI: typecheck → unit tests → build → `verify:pack`, then the lab's
   conformance check (`oracle`, `cases`, `jitter`) on SwiftShader at 640×360
   (about 5 min). Real-GPU runs stay local (`npm run measure`).
@@ -317,25 +320,41 @@ plan's; their branches can serve as dev benches, as the upscaler's did.
   with 0 false positives in 1,237 frames. Warping error is judged through the
   node, because camera motion as the judge rewarded the output built from it.
   That branch is the upscaler's to keep or drop.
-- Run the audit on Babylon's velocity with the deformers scene. Findings
-  recorded here; nothing posted.
+- ✅ The audit on Babylon's velocity with the deformers scene (2026-11-19,
+  MOTION.md §11, `npm run audit:babylon`, CI's `babylon` job on SwiftShader).
+  On Babylon.js 9.31.0, camera and rigid motion are exact at any number of
+  renders, and deformation is never reported as motion. Deformation motion
+  reads zero (0.16 / 0.09 px missed on the slow cases). Skinning under
+  Babylon's default bone texture reads zero bone motion; with bone uniforms
+  it is exact. Object history rolls per engine frame (1.21 px at two renders)
+  and goes stale on a mesh's first frame after not being drawn (63 px after
+  30 hidden frames). Drafts in [upstream/babylon.md](upstream/babylon.md);
+  nothing posted.
 - ✅ Upstream issues drafted (#17/#18,
   [upstream/three.md](upstream/three.md), tracked in
   [upstream/README.md](upstream/README.md)). Filed in Phase 5.
 
-**Exit:** Babylon findings recorded.
+**Exit:** Babylon findings recorded. Met 2026-11-19.
 
 ### ⛳ P: publish 0.1.0, the alpha (review no later than **2026-12-15**, proposed)
 
-Publish when all of these hold:
-1. Phase 2, 3 and 4 exits passed.
-2. The contract (§3.1, including `.zw`) hasn't changed since the upscaler dry
-   run (Phase 4).
-3. Costs measured for the node, cut detection, motion from depth and warping
-   error.
-4. Upstream checked: anything three already fixed defers to three (R12).
-5. Release setup: `private` off, a publish workflow, npm access to the
-   `@pmndrs` scope.
+Publish when all of these hold (checked 2026-11-19):
+1. ✅ Phase 2, 3 and 4 exits passed.
+2. ✅ The contract (§3.1, including `.zw`) hasn't changed since the upscaler dry
+   run (Phase 4): since `bf3594c` only CONTRACT.md's per-engine notes changed
+   (the three node's flags, the Babylon audit), not the texel.
+3. ✅ Costs measured for the node, cut detection, motion from depth and warping
+   error (MOTION.md §8, §9).
+4. ✅ Upstream checked: anything three already fixed defers to three (R12).
+   r187 is still three's latest release, and the `upstream` experiment
+   measures its table.
+5. Release setup: ✅ `private` off and version 0.1.0 (CHANGELOG.md); ✅ a
+   publish workflow (`.github/workflows/release.yml`, manual dispatch, dry run
+   by default, provenance). Left for the maintainer: make the repository
+   public (npm refuses provenance from a private one); npm access to the
+   `@pmndrs` scope (an `NPM_TOKEN` in the `npm` environment for the first
+   publish, then trusted publishing); run Release with version `0.1.0`, dry
+   run first.
 
 If one fails: name it, fix it, and set a new review date.
 
@@ -388,7 +407,9 @@ If one fails: name it, fix it, and set a new review date.
 | 2026-11-18 | Warping error ships as `WarpingError` (one field, contract `.w` mask, own history); the lab bars it against the audit and checks it ranks motion fields like the oracle | Done (MOTION.md §9) |
 | 2026-11-17 | `.z` = `MotionFlag` (0 no surface, 1 exact, 2 camera only, 3 rigid, 4 no previous); `.w` = previous view-space linear depth, 0 when not available | Done (CONTRACT.md) |
 | 2026-11-14 | D1: `positionNode` previous is feasible (graph rebuilt with substituted leaves) | Done (MOTION.md §8) |
-| — | P: publish 0.1.0 (alpha) | Pending (review by 2026-12-15, proposed) |
+| 2026-11-19 | Phase 4 done: Babylon audited on the deformers objects plus skinning, history and visibility cases; findings in MOTION.md §11, drafts in upstream/babylon.md | Done |
+| 2026-11-19 | Release setup: version 0.1.0, `private` off, a manual Release workflow modelled on the downsampler's (dry run by default, provenance, trusted publishing or a first-publish token) | Done; publishing is the maintainer's |
+| — | P: publish 0.1.0 (alpha) | Checks pass; waiting on the repo going public, npm access and the Release run |
 | — | D3: optical flow | Pending (Phase 5) |
 
 ## 9. Open questions

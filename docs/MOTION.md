@@ -672,7 +672,89 @@ Metal, 1280×720, ratio 2, three **r186.1**:
   rounding level: the audit's mean residual moves by at most 3 × 10⁻⁷, and
   near-threshold pixels by at most 78 of 921,600 per frame.
 
-## 11. What's worth building next
+## 11. Phase 4: Babylon's velocity (2026-11-19)
+
+The audit PLAN.md §3.7 asks for before any `/babylon` work. `lab/babylon.html`
+renders the deformers scene's objects in Babylon.js **9.31.0** (WebGPU, a frame
+graph `FrameGraphGeometryRendererTask` writing linear velocity) and compares
+Babylon's velocity per pixel against exact motion (`npm run audit:babylon`,
+`scripts/audit-babylon.mjs`). Each run shows one object.
+
+The oracle is computed on the CPU from Babylon's own `PREPASS_LOCAL_POSITION`
+output, the deformed local position under each pixel, read from the same draw
+as the velocity, so coverage matches exactly. It inverts the scene's analytic
+deformation at this frame's parameters and re-applies it at last frame's. It
+keeps its own copies of last frame's world, bone and view-projection matrices.
+Deformations are written where a Babylon author would write them: a material
+plugin moving `positionUpdated` (`CUSTOM_VERTEX_UPDATE_POSITION`, the analogue
+of `positionNode`) and a morph target. The skinned limb weights every vertex
+fully to one of two bones, so the oracle knows each pixel's bone from its
+position.
+
+Metal, 1280×720, frames 1–239, mean endpoint error in render px (three's
+convention; Babylon's linear velocity is `0.5 · (previous − current)` in NDC):
+
+| Case | Moved | Babylon reports | Babylon error | Worst frame |
+|---|---|---|---|---|
+| Floor, still camera (control) | 0 | 0 | 0.000 | 0.00 |
+| Floor, camera translating (control) | 2.77 | 2.77 | 0.000 | 0.00 |
+| … 2 renders per engine frame | 2.77 | 2.77 | 0.000 | 0.00 |
+| Rigid rotating box (control) | 2.43 | 2.43 | 0.000 | 0.00 |
+| … 2 renders per engine frame | 2.43 | 3.63 | **1.21** | 2.91 (every second render) |
+| … hidden frames 60–89, still rotating | 2.41 | 2.71 | 0.303 | **63.25** (frame 90, first shown) |
+| Static displacement (plugin) | 0 | 0 | 0.000 | 0.00 |
+| Animated displacement `sin(5x + 3t)` | 0.158 | 0 | **0.158** | 0.17 |
+| Morph target, oscillating | 0.089 | 0 | **0.089** | 0.14 |
+| Ball leaving and re-entering the frustum | 14.26 | 14.26 | 0.000 | 0.00 (frame 163) |
+| Skinned limb, bone texture (Babylon's default) | 0.864 | 0 | **0.864** | 2.01 |
+| Skinned limb, bone uniforms | 0.864 | 0.864 | 0.000 | 0.00 |
+| … 2 renders per engine frame | 0.864 | 0.864 | 0.000 | 0.00 |
+
+The three controls read 0.000 on every frame, which validates the oracle, the
+readback and the convention. On SwiftShader at 640×360 (frames 1–100, CI's
+`babylon` job) every row repeats at half the pixel scale.
+
+- **Deformation is rigid, never false.** Babylon evaluates the deformed
+  position (`positionUpdated`, after morph targets and plugin code) for both
+  endpoints and moves only the matrices. A static displacement therefore reads
+  exact, where three reports 3.24 px. Real deformation motion reads zero, so
+  the error equals the motion, exactly as zero motion would. Our node's
+  fallback (flag 3, CONTRACT.md) behaves the same way, but it is the fallback,
+  not the default. On these slow deformations the cost is small: 0.16 and
+  0.09 px, against three's 3.14 and 4.87 on the same cases (§7). It grows with
+  deformation speed: a fast swell like §7's water would be missed outright.
+- **Skinning is missed by default.** Babylon stores bone matrices in a texture
+  wherever float textures exist (`useTextureToStoreBoneMatrices`, default
+  `true`), so on WebGPU every skinned mesh gets it. With a bone texture
+  `BONES_VELOCITY_ENABLED` is off (`materialHelper.geometryrendering.js`), and
+  the velocity is computed from the unskinned bind pose under the world
+  matrix. Bone motion reads zero: 236 of 239 frames are above 0.25 px.
+  `useTextureToStoreBoneMatrices = false` makes it exact, even at two renders
+  per frame, because previous bones roll on every bind. Switching that setting
+  on a live mesh only takes effect after the material rebuilds
+  (`markAsDirty`).
+- **Object history rolls once per engine frame**, keyed on `engine.frameId`.
+  The camera's rolls whenever the view-projection changes, so cameras are
+  exact at any number of renders. An app that renders twice between
+  `beginFrame` and `endFrame` gets a stale previous world matrix on the second
+  render: one extra frame of motion (2.91 px worst). This is the object-side
+  twin of three's camera history problem (§7).
+- **A mesh not drawn last frame keeps a matrix from frames ago.** After 30
+  hidden frames, the box's first frame back reads 63.25 px against 2.50 px of
+  real motion. Frustum re-entry along a continuous path is exact (frame 163),
+  but only because the bounding-sphere test binds the mesh a frame before it
+  covers any pixel. A teleport while culled, or an `isVisible` toggle, shows
+  the stale matrix. Our three node answers this case with flag 4 and zero
+  motion (§8).
+
+What this means for a `/babylon` adapter (Phase 5): camera and rigid motion
+need nothing. The node's value there would be deformation (morph targets with
+previous influences, a previous-position hook for plugins) and skinning under
+bone textures, plus per-frame object history keyed on an explicit
+`beginFrame()`. Drafts for Babylon are in
+[upstream/babylon.md](upstream/babylon.md), filed after 0.1.0.
+
+## 12. What's worth building next
 
 The agreed spec and phased plan, with decision gates and the intended split
 into its own package, is [PLAN.md](PLAN.md).

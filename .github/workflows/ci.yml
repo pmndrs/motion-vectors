@@ -107,3 +107,32 @@ jobs:
           path: results/pixi
           if-no-files-found: warn
           retention-days: 14
+
+  # Babylon's own velocity against exact motion (scripts/audit-babylon.mjs,
+  # docs/MOTION.md §11). The floor and rigid-box controls must read exact; the
+  # other rows are findings, reported, not bars.
+  babylon:
+    name: Babylon audit (SwiftShader)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install Chrome for Testing
+        run: |
+          path=$(npx -y @puppeteer/browsers@2 install chrome@stable --path "$RUNNER_TEMP/cft" --format '{{path}}')
+          echo "CHROME_PATH=$path" >> "$GITHUB_ENV"
+          "$path" --version
+      - name: Babylon audit
+        run: node scripts/audit-babylon.mjs --adapter swiftshader --width 640 --height 360 --end 100
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: babylon-audit
+          path: results/babylon
+          if-no-files-found: warn
+          retention-days: 14
