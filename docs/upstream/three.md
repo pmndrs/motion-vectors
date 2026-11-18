@@ -4,9 +4,9 @@ Two drafts, one per issue, written to stand alone. Editor notes are in
 [brackets]: remove them before filing.
 
 [Before filing:
-- File after `@pmndrs/motion-vectors` 0.x is public, so the issues can link the
-  lab and the node as the repro and the reference fix. Until then the repo is
-  private and every link below would 404.
+- File after `@pmndrs/motion-vectors` 0.1.0 is on npm (PLAN.md Phase 5), so the
+  issues can link the lab and the node as the repro and the reference fix.
+  Until then the repo is private and every link below would 404.
 - Every number is from the lab (docs/MOTION.md §7, §8): three **r187**, WebGPU,
   Apple Metal, 1280×720, mean endpoint error in render pixels against an exact
   oracle rendered in the same pass. Re-run `npm run measure -- --experiments

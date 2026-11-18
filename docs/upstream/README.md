@@ -4,8 +4,9 @@ Issues we found in engines while building this package. The drafts are ready
 to paste, with editor notes in [brackets]; the table tracks where each one
 stands.
 
-**Filing waits for 0.x on npm** (decided 2026-11-19): the drafts link this repo
-as the repro and the reference fix, and it's private until then.
+**Filing waits until every phase is done and 0.1.0 is on npm** (decided
+2026-11-19, PLAN.md Phase 5): the drafts link this repo as the repro and the
+reference fix.
 
 | Project | Issue | Draft | Status |
 |---|---|---|---|

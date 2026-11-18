@@ -542,10 +542,11 @@ history copies. It is a measurement, so a bench pays it only while measuring.
 
 ## 10. Phase 4: the upscaler bench (2026-11-18)
 
-The upscaler's motion probe ([pmndrs/upscaler#110](https://github.com/pmndrs/upscaler/pull/110))
-now installs this package from a packed tarball committed to that repo
-(`vendor/motion-vectors/`, from `bf3594c`). Its frozen copy of the lab passes is
-gone. It runs the node in the MRT slot named `velocity`, three's `velocity` in a
+A pre-release dry run, using a branch of the upscaler as a dev bench
+([pmndrs/upscaler#110](https://github.com/pmndrs/upscaler/pull/110)): the
+upscaler's motion probe installs this package from a packed tarball
+(`vendor/motion-vectors/`, from `bf3594c`) instead of its frozen copy of the lab
+passes. It runs the node in the MRT slot named `velocity`, three's `velocity` in a
 third slot, `MotionFromDepthPass` (camera motion and cuts, read back before the
 upscale so a reset lands in the same frame) and `WarpingError` on the output.
 Metal, 1280×720, ratio 2, three **r186.1**:
