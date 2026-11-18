@@ -5,6 +5,8 @@ import { earthMovers, jensenShannon } from '../../src/index.js';
 import { createThreeTextureAllocator, getGPUTexture, MotionFromDepthPass, MotionVectors } from '../../src/three/index.js';
 import {
     type CutResult,
+    WarpingError,
+    type WarpingResult,
     MotionAnalyzer,
     RESIDUAL_DEBUG_CLASSIFY,
     RESIDUAL_DEBUG_HEAT,
@@ -88,6 +90,8 @@ interface LabRequest {
     timing?: boolean;
     /** Candidate shown by the heat / motion views (0 zero, 1 three, 2 camera, 3 oracle). */
     heatCandidate?: number;
+    /** Also measure unmasked warping error through the engine's motion and camera motion (the `warp` experiment). */
+    warp?: boolean;
 }
 
 interface FrameRecord {
@@ -109,9 +113,14 @@ interface FrameRecord {
     cutDepth: ResidualStats | null;
     /** The GPU cut verdict (`MotionFromDepthPass` → `CutDetector`; candidates zero, camera and the engine's velocity). */
     cutGpu: CutResult | null;
-    /** GPU milliseconds of motion from depth and of the cut detector (where timestamp queries exist). */
+    /** Warping error of the output through camera motion from depth (`WarpingError`); null-scored on the first frame. */
+    warp: WarpingResult;
+    /** With `request.warp`: unmasked warping error through the engine's motion and through camera motion. */
+    warpUnmasked: { engine: WarpingResult; camera: WarpingResult } | null;
+    /** GPU milliseconds of motion from depth, the cut detector and warping error (where timestamp queries exist). */
     cameraMotionMs?: number;
     cutMs?: number;
+    warpMs?: number;
     /** GPU milliseconds of the scene render (shadow + MRT passes), with `timing`. */
     renderMs?: number;
 }
@@ -152,23 +161,32 @@ await analyzer.init();
 // the analyzer's audit (same test, the analyzer's own motion from depth).
 const depthMotion = new MotionFromDepthPass(renderer);
 await depthMotion.init();
+// Warping error on camera motion from depth: the same test as the audit's camera
+// candidate, so the two must agree pixel for pixel (scripts/measure-motion.mjs).
+const warping = new WarpingError(device);
+// The `warp` experiment's comparison (`request.warp`): the engine's motion and
+// camera motion, both unmasked so they score the same pixels (a mask would
+// drop exactly the moving objects camera motion gets wrong).
+const warpingEngine = new WarpingError(device);
+const warpingCamera = new WarpingError(device);
+await Promise.all([warping.init(), warpingEngine.init(), warpingCamera.init()]);
 
-// Timestamps around the helper's motion from depth (0, 1) and cut detector (2, 3), where the device has them.
+// Timestamps around the helper's motion from depth (0, 1), its cut detector (2, 3) and warping error (4, 5), where the device has them.
 const passTimer = device.features.has('timestamp-query')
     ? {
-          set: device.createQuerySet({ type: 'timestamp', count: 4 }),
-          resolve: device.createBuffer({ size: 32, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC }),
-          read: device.createBuffer({ size: 32, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }),
+          set: device.createQuerySet({ type: 'timestamp', count: 6 }),
+          resolve: device.createBuffer({ size: 48, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC }),
+          read: device.createBuffer({ size: 48, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }),
       }
     : null;
 const passWrites = (first: number): GPUComputePassTimestampWrites | undefined =>
     passTimer ? { querySet: passTimer.set, beginningOfPassWriteIndex: first, endOfPassWriteIndex: first + 1 } : undefined;
-async function readPassTimes(): Promise<{ cameraMotionMs: number; cutMs: number } | null> {
+async function readPassTimes(): Promise<{ cameraMotionMs: number; cutMs: number; warpMs: number } | null> {
     if (!passTimer) return null;
     await passTimer.read.mapAsync(GPUMapMode.READ);
     const t = new BigUint64Array(passTimer.read.getMappedRange().slice(0));
     passTimer.read.unmap();
-    return { cameraMotionMs: Number(t[1] - t[0]) / 1e6, cutMs: Number(t[3] - t[2]) / 1e6 };
+    return { cameraMotionMs: Number(t[1] - t[0]) / 1e6, cutMs: Number(t[3] - t[2]) / 1e6, warpMs: Number(t[5] - t[4]) / 1e6 };
 }
 
 // One stable matrix for the session (see `velocityProjection`).
@@ -274,6 +292,9 @@ async function run(request: LabRequest): Promise<{ frames: FrameRecord[]; object
     lab.select?.(request.objects);
     analyzer.reset();
     depthMotion.reset();
+    warping.reset();
+    warpingEngine.reset();
+    warpingCamera.reset();
     oracle.reset();
     motionVectors.reset();
     const driven = request.driven !== false;
@@ -376,9 +397,20 @@ async function run(request: LabRequest): Promise<{ frames: FrameRecord[]; object
                 motions: [engine],
                 timestampWrites: { motion: passWrites(0), cut: passWrites(2) },
             });
+            // Before the analyzer's endFrame: its linearDepth is still this frame's.
+            warping.encode(late, {
+                current: gpu(color),
+                motion: analyzer.cameraMotion.gpu,
+                linearDepth: analyzer.fromDepth.linearDepth,
+                timestampWrites: passWrites(4),
+            });
+            if (request.warp) {
+                warpingEngine.encode(late, { current: gpu(color), motion: gpu(engine) });
+                warpingCamera.encode(late, { current: gpu(color), motion: analyzer.cameraMotion.gpu });
+            }
             if (passTimer) {
-                late.resolveQuerySet(passTimer.set, 0, 4, passTimer.resolve, 0);
-                late.copyBufferToBuffer(passTimer.resolve, 0, passTimer.read, 0, 32);
+                late.resolveQuerySet(passTimer.set, 0, 6, passTimer.resolve, 0);
+                late.copyBufferToBuffer(passTimer.resolve, 0, passTimer.read, 0, 48);
             }
             analyzer.encodeSnapshot(late, 'input', gpu(color));
             analyzer.endFrame();
@@ -388,11 +420,13 @@ async function run(request: LabRequest): Promise<{ frames: FrameRecord[]; object
             if (!measured) continue;
             const stats = await analyzer.readStats();
             const cutGpu = await depthMotion.readCut();
+            const warp = await warping.read();
+            const warpUnmasked = request.warp ? { engine: await warpingEngine.read(), camera: await warpingCamera.read() } : null;
             const passTimes = await readPassTimes();
             const compare: Record<string, CompareObjectStats> = {};
             for (const [id, objectStats] of (stats.compare ?? []).entries())
                 if (objectStats.valid + objectStats.noPrevious > 0) compare[lab.objects[id] ?? `id-${id}`] = objectStats;
-            frames.push({ frame, segment: truth.segment, cut: truth.cut, jittered, compare, audit: stats.residuals[0], cutJS, cutEMD, cutDepth: stats.residuals[1], cutGpu, ...passTimes, renderMs });
+            frames.push({ frame, segment: truth.segment, cut: truth.cut, jittered, compare, audit: stats.residuals[0], cutJS, cutEMD, cutDepth: stats.residuals[1], cutGpu, warp, warpUnmasked, ...passTimes, renderMs });
         }
     } finally {
         if (trap) velocity.setProjectionMatrix(velocityProjection);

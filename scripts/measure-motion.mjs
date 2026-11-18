@@ -77,6 +77,8 @@ const AUDIT = ['zero', 'three', 'camera', 'oracle'];
 /** Mean endpoint error a conforming source stays under where it is exact (CONTRACT.md). */
 const EXACT_PIXELS = 0.01;
 const failures = [];
+/** Worst `WarpingError` disagreement with the audit over every run: scored/total pixels, `over` share, mean error. */
+const warpParityMax = { exact: 0, over: 0, meanError: 0 };
 /**
  * Records a bar for --check: `summary`'s candidate error must stay under EXACT_PIXELS.
  * @param {string} label - What is checked
@@ -447,6 +449,67 @@ function cutParity(frame) {
     );
 }
 
+/**
+ * The lab's `WarpingError` (camera motion from depth, masked) against the
+ * audit's camera candidate (slot 1, candidate 2: the same test). Scored and
+ * total pixels must match exactly. Two separately compiled shaders can still
+ * disagree on a pixel sitting exactly at the threshold or at a fixed-point .5
+ * (measured: `over` up to 4 px, the error sum a few units of ~10⁷), so those
+ * get tolerances far below anything a bench reads: `over` within 1e-5 of the
+ * pixels, the mean error within 1e-6. `null` when a frame lacks either.
+ */
+function warpParity(frame) {
+    const audit = frame.cutDepth;
+    const warp = frame.warp;
+    if (!audit || !warp?.hasPrevious) return null;
+    const camera = audit.candidates[2];
+    const valid = Math.round(camera.valid * audit.pixels);
+    return {
+        exact: Math.max(Math.abs(valid - warp.counts.scored), Math.abs(audit.pixels - warp.counts.pixels)),
+        over: Math.abs(Math.round(camera.unexplained * audit.pixels) - warp.counts.over) / audit.pixels,
+        meanError: Math.abs(camera.meanResidual - warp.meanError),
+    };
+}
+
+/** Pools warping results over frames: total error over total scored pixels, mean shares. */
+function poolWarp(results) {
+    const measured = results.filter((result) => result?.hasPrevious);
+    if (!measured.length) return null;
+    const sum = (key) => measured.reduce((total, result) => total + result.counts[key], 0);
+    const pixels = sum('pixels');
+    return { frames: measured.length, meanError: sum('errorSum') / 1024 / Math.max(sum('scored'), 1), scored: sum('scored') / pixels, over: sum('over') / pixels };
+}
+
+/**
+ * Warping error as a bench metric: does it rank motion fields the way the
+ * oracle does, with no ground truth? Unmasked, so every field is scored on
+ * (nearly) the same pixels: camera motion from depth (static world only),
+ * three's `velocity` and this package's node, on the scenes with moving and
+ * deforming objects. Bars: on deformers and cases, the node (exact there,
+ * MOTION.md §8) reads below both. Water is reported only (see below).
+ */
+async function warp(run) {
+    const summary = {};
+    console.log('  scene        frames   camera err  three err   node err   scored (camera / three / node)');
+    for (const scene of ['deformers', 'cases', 'water']) {
+        const threeRun = await run({ scene, warp: true });
+        const nodeRun = await run({ scene, motion: 'node', warp: true });
+        const camera = poolWarp(nodeRun.frames.map((frame) => frame.warpUnmasked?.camera));
+        const three = poolWarp(threeRun.frames.map((frame) => frame.warpUnmasked?.engine));
+        const node = poolWarp(nodeRun.frames.map((frame) => frame.warpUnmasked?.engine));
+        summary[scene] = { camera, three, node };
+        console.log(
+            `  ${scene.padEnd(12)} ${String(node.frames).padStart(6)}  ${fmt(camera.meanError, 5, 10)} ${fmt(three.meanError, 5, 10)} ${fmt(node.meanError, 5, 10)}   ${pct(camera.scored)} / ${pct(three.scored)} / ${pct(node.scored)}`,
+        );
+        // Water is reported, not barred: its glints and ripples don't move with the surface (MOTION.md §7, "Water"),
+        // so the exact geometric motion is no better at warping its image than camera motion (MOTION.md §9).
+        if (scene === 'water') continue;
+        if (node.meanError > camera.meanError) failures.push(`warp ${scene}: node ${node.meanError} above camera motion ${camera.meanError}`);
+        if (node.meanError > three.meanError) failures.push(`warp ${scene}: node ${node.meanError} above three ${three.meanError}`);
+    }
+    return summary;
+}
+
 async function cuts(run, screenshot) {
     const result = await run({ scene: 'cuts' });
     const series = result.frames.map((frame) => {
@@ -475,6 +538,7 @@ async function cuts(run, screenshot) {
             parity,
             cameraMotionMs: frame.cameraMotionMs ?? null,
             cutMs: frame.cutMs ?? null,
+            warpMs: frame.warpMs ?? null,
         };
     });
     const max = (rows, key) => Math.max(0, ...rows.map((row) => row[key] ?? 0));
@@ -531,6 +595,7 @@ async function cuts(run, screenshot) {
     for (const [key, label] of [
         ['cameraMotionMs', 'motion from depth'],
         ['cutMs', 'cut detector'],
+        ['warpMs', 'warping error'],
     ]) {
         const values = timed(key).sort((a, b) => a - b);
         if (!values.length) continue;
@@ -571,7 +636,7 @@ async function probe(run, screenshot) {
     return Array.isArray(parsed) ? results : results[0];
 }
 
-const EXPERIMENTS = { oracle: oracleCheck, deformers, cases, ticks, jitter, water, track, cuts, node, cost, probe };
+const EXPERIMENTS = { oracle: oracleCheck, deformers, cases, ticks, jitter, water, track, cuts, node, warp, cost, probe };
 
 //* Harness
 async function main() {
@@ -636,6 +701,12 @@ async function main() {
             const value = result.result.value;
             const parity = Math.max(0, ...value.frames.map((frame) => cutParity(frame) ?? 0));
             if (parity !== 0) failures.push(`MotionFromDepthPass (${request.scene}): cut counts differ from the audit's by up to ${parity} pixel(s)`);
+            const warpRows = value.frames.map(warpParity).filter(Boolean);
+            const most = (key) => Math.max(0, ...warpRows.map((row) => row[key]));
+            for (const key of Object.keys(warpParityMax)) warpParityMax[key] = Math.max(warpParityMax[key], most(key));
+            if (most('exact') !== 0) failures.push(`WarpingError (${request.scene}): scored pixels differ from the audit's camera candidate by up to ${most('exact')}`);
+            if (most('over') > 1e-5) failures.push(`WarpingError (${request.scene}): 'over' differs by ${most('over').toExponential(2)} of the pixels`);
+            if (most('meanError') > 1e-6) failures.push(`WarpingError (${request.scene}): mean error differs by ${most('meanError').toExponential(2)}`);
             return value;
         };
         const screenshot = async (name) => {
@@ -657,6 +728,9 @@ async function main() {
         await writeFile(join(outputDirectory, 'browser-log.txt'), `${records.join('\n')}\n`);
         if (records.some((line) => /error|exception|validation|invalid/i.test(line))) console.warn(`\nbrowser log:\n${records.join('\n')}`);
         console.log(`\nartifacts: ${outputDirectory}`);
+        console.log(
+            `\nWarpingError vs the audit's camera candidate, over every run: scored ${warpParityMax.exact} px apart, 'over' ${warpParityMax.over.toExponential(2)} of the pixels, mean error ${warpParityMax.meanError.toExponential(2)}`,
+        );
         if (cli.check) {
             if (failures.length) {
                 console.error(`\nconformance: ${failures.length} bar(s) failed\n  ${failures.join('\n  ')}`);

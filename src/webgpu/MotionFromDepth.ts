@@ -113,7 +113,8 @@ export class MotionFromDepth<THandle = GPUTexture> {
                 label: `motion-linear-depth-${index}`,
                 size: { width, height },
                 format: 'r32float',
-                usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING,
+                // COPY_SRC: consumers such as `WarpingError` keep a copy.
+                usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC,
             }),
         );
         this.reset();
