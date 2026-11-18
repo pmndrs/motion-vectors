@@ -266,6 +266,102 @@ async function jitter(run) {
 }
 
 /**
+ * R12 (docs/PLAN.md §3.2): three's own `velocity` on every case in the node's
+ * upstream table (src/three/upstream.ts), against what the table claims for
+ * the running release. The node defers a case to three once the table says
+ * three handles it, so a mismatch fails: three got exact on a case the table
+ * still has open (update `fixedIn`, retire the node's code for it), or a case
+ * the table calls fixed isn't exact (a regression, or a wrong entry).
+ */
+async function upstream(run, _screenshot, lab) {
+    const { revision, cases } = await lab.evaluate('window.__motionLab.upstream');
+    const error = (summary) => summary?.candidates[1].error ?? null;
+    const of = (result, name, filter = () => true) => error(compareSummary(result.frames.filter(filter), name));
+    const worst = (...values) => (values.some((value) => value === null) ? null : Math.max(...values));
+    const deformers = await run({ scene: 'deformers', fresh: true });
+    const moveHold = await run({ scene: 'cases', fresh: true });
+    const rigs1 = await run({ scene: 'rigs', fresh: true });
+    const rigs2 = await run({ scene: 'rigs', rendersPerTick: 2, fresh: true });
+    const track2 = await run({ scene: 'track', rendersPerTick: 2, end: 175 });
+    const trap = await run({ scene: 'track', end: 29, jitter: 10, velocityProjection: 'trap', fresh: true });
+    const trackMotion = (frame) => isMotion(frame.segment) && !frame.segment.startsWith('scene');
+    const measured = {
+        positionNode: worst(of(deformers, 'displaced'), of(deformers, 'wave'), of(moveHold, 'node-move')),
+        morph: worst(of(deformers, 'morph'), of(moveHold, 'morph-ramp')),
+        displacementMap: of(rigs1, 'displacement-map'),
+        cameraHistory: of(track2, 'static', trackMotion),
+        skinningHistory: of(rigs2, 'skinned'),
+        projection: of(trap, 'static', (frame) => frame.jittered),
+        skinning: of(rigs1, 'skinned'),
+        instancing: worst(of(rigs1, 'instanced'), of(rigs2, 'instanced')),
+        batching: worst(of(rigs1, 'batched'), of(rigs2, 'batched')),
+    };
+    console.log(`  three r${revision}`);
+    console.log('  case               req   three err   table      status');
+    const summary = { revision, cases: {} };
+    for (const [id, entry] of Object.entries(cases)) {
+        const value = measured[id];
+        const exact = value !== null && value <= EXACT_PIXELS;
+        const claimed = entry.fixedIn !== null && revision >= entry.fixedIn;
+        const status = exact === claimed ? (exact ? 'three handles it' : 'node handles it') : 'MISMATCH';
+        summary.cases[id] = { error: value, fixedIn: entry.fixedIn, exact, claimed };
+        console.log(`  ${id.padEnd(18)} ${entry.requirement.padEnd(4)} ${fmt(value)}   ${(entry.fixedIn === null ? 'open' : `r${entry.fixedIn}`).padEnd(9)}  ${status}`);
+        if (value === null) failures.push(`upstream ${id}: not measured`);
+        else if (exact && !claimed) failures.push(`upstream ${id}: three r${revision} is exact (${value} px); set fixedIn and retire the node's code for it`);
+        else if (!exact && claimed) failures.push(`upstream ${id}: three r${revision} is ${value} px off, but the table says fixed in r${entry.fixedIn}`);
+    }
+    return summary;
+}
+
+/**
+ * R3 (docs/PLAN.md §3.2): skinning, instancing and batching, the deformations
+ * three moves `positionPrevious` for itself. Three's `velocity` and the node
+ * per object and segment, at one and at two renders per frame (each draw's
+ * history must hand over per frame, not per draw or per display refresh).
+ * R7's texture-driven planes ride along: with the author's previous position
+ * the node is exact; marked 'rigid' or left alone it can't be.
+ * Bars: the node exact on every row but those two, and contract-conformant
+ * (.z flags, .w) on all of them.
+ */
+async function rigs(run) {
+    const summary = {};
+    const header = '  object/segment               renders  px moved   three err   node err  >0.25px  >1px  .z wrong   .w err';
+    console.log(header);
+    for (const rendersPerTick of [1, 2]) {
+        const three = cli.check ? null : await run({ scene: 'rigs', rendersPerTick, fresh: true });
+        const ours = await run({ scene: 'rigs', motion: 'node', rendersPerTick, fresh: true, flags: true });
+        // The flag values themselves (the comparison only checks "previous claimed or not"):
+        // exact everywhere but the planes the node can't follow, which must say rigid (3).
+        for (const [name, histogram] of Object.entries(ours.flags ?? {})) {
+            if (name === 'static') continue;
+            const expected = name === 'texture-rigid' || name === 'texture-auto' ? 3 : 1;
+            const wrong = Object.entries(histogram).filter(([flag]) => Number(flag) !== expected).reduce((total, [, count]) => total + count, 0);
+            summary[`${name} flags x${rendersPerTick}`] = histogram;
+            console.log(`  ${name.padEnd(28)} ${String(rendersPerTick).padStart(6)}   .z on the last frame: ${JSON.stringify(histogram)}`);
+            if (wrong) failures.push(`rigs: ${name}, ${rendersPerTick} render(s)/frame: ${wrong} pixel(s) not flagged ${expected}`);
+        }
+        for (const name of Object.values(ours.objects).filter((object) => object !== 'static')) {
+            const threeSegments = three ? bySegment(three.frames, three.segments) : null;
+            bySegment(ours.frames, ours.segments).forEach((segment, i) => {
+                const label = `${name} ${segment.name}`;
+                const node = compareSummary(segment.frames, name);
+                const base = threeSegments ? compareSummary(threeSegments[i].frames, name) : null;
+                const c = node?.candidates[1];
+                summary[`${label} x${rendersPerTick}`] = { three: base?.candidates[1].error ?? null, node: c?.error ?? null, motion: node?.motion ?? null, wrongFlags: c?.wrongFlags ?? null, depthError: c?.depthError ?? null };
+                if (!node) return console.log(`  ${label.padEnd(28)} ${String(rendersPerTick).padStart(6)}   (not visible)`);
+                console.log(
+                    `  ${label.padEnd(28)} ${String(rendersPerTick).padStart(6)}   ${fmt(node.motion)}  ${fmt(base?.candidates[1].error)}   ${fmt(c.error)}  ${pct(c.over025)} ${pct(c.over1, 1, 5)} ${String(c.wrongFlags).padStart(9)} ${fmt(c.depthError, 5)}`,
+                );
+                // R7's 'rigid' and no-hook planes leave the deformation out by design: reported, not barred.
+                if (name !== 'texture-rigid' && name !== 'texture-auto') expectExact(`rigs: ${label}, ${rendersPerTick} render(s)/frame`, node, 1);
+                expectContract(`rigs: ${label}, ${rendersPerTick} render(s)/frame`, node, 1);
+            });
+        }
+    }
+    return summary;
+}
+
+/**
  * This package's three node (src/three) against three's `velocity`, on every
  * oracle case. The node fills the lab's `velocity` slot (`motion: 'node'`),
  * so both read as candidate 1 of their own runs. Phase 2's exit: every object
@@ -343,7 +439,7 @@ async function cost(run) {
         return values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
     };
     console.log('  scene        three ms    node ms  median Δus    Δ %   (per repetition: node − three, µs; % of three\'s scene render)');
-    for (const scene of ['deformers', 'water', 'track']) {
+    for (const scene of ['deformers', 'water', 'rigs', 'track']) {
         const end = scene === 'track' ? 240 : undefined;
         const pairs = [];
         for (let rep = 0; rep < reps; rep++) {
@@ -636,7 +732,7 @@ async function probe(run, screenshot) {
     return Array.isArray(parsed) ? results : results[0];
 }
 
-const EXPERIMENTS = { oracle: oracleCheck, deformers, cases, ticks, jitter, water, track, cuts, node, warp, cost, probe };
+const EXPERIMENTS = { oracle: oracleCheck, deformers, cases, rigs, upstream, ticks, jitter, water, track, cuts, node, warp, cost, probe };
 
 //* Harness
 async function main() {
@@ -720,7 +816,7 @@ async function main() {
             if (!measure) throw new Error(`Unknown experiment ${experiment}`);
             const started = Date.now();
             console.log(`\n== ${experiment}`);
-            const record = await measure(run, screenshot);
+            const record = await measure(run, screenshot, { evaluate: (expression) => client.evaluate(expression) });
             await writeFile(join(outputDirectory, `${experiment}.json`), `${JSON.stringify(record, null, 2)}\n`);
             console.log(`  (${((Date.now() - started) / 1000).toFixed(0)} s)`);
         }
