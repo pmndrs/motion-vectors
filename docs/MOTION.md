@@ -540,7 +540,44 @@ doesn't run it; CI's existing shards do run the agreement bars.
 runs (54.9 µs in the other). That covers the compute pass only, not the two
 history copies. It is a measurement, so a bench pays it only while measuring.
 
-## 10. What's worth building next
+## 10. Phase 4: the upscaler bench (2026-11-18)
+
+The upscaler's motion probe ([pmndrs/upscaler#110](https://github.com/pmndrs/upscaler/pull/110))
+now installs this package from a packed tarball committed to that repo
+(`vendor/motion-vectors/`, from `bf3594c`). Its frozen copy of the lab passes is
+gone. It runs the node in the MRT slot named `velocity`, three's `velocity` in a
+third slot, `MotionFromDepthPass` (camera motion and cuts, read back before the
+upscale so a reset lands in the same frame) and `WarpingError` on the output.
+Metal, 1280×720, ratio 2, three **r186.1**:
+
+- **The node runs on r186.1**, one release below this repo's r187 baseline.
+  On Q19's rigid motion, the upscaler fed the node matches the upscaler fed
+  three's velocity (warping error 0.0017, |out − SSAA| 0.0184 / 0.0168). The
+  bench has no deformers, so that is the expected result.
+- **Cut detection:** Q10's cut reads 0.268 and fires. Every other Q10 frame
+  reads at most 0.003 and Q19's motion at most 0.010: **0 false positives in
+  1,237 frames**. Resetting on the detector matches the scenario's scripted
+  reset exactly (|out − SSAA| 0.0079 against 0.0142 with no reset, frames
+  60–63). Q10's 0.268 sits closer to the 0.2 threshold than this lab's cuts
+  (0.30–1.0). Q10 cuts between two views of one room, the case §7 calls
+  common.
+- **Choose the warping-error judge carefully.** The first run judged every
+  path through camera motion from depth, and that was wrong. In Q19's
+  scene-recede segment the objects move straight away from a still camera.
+  Camera motion calls them still, and the mask lets them through, because
+  their depth changes by less than its 5 % a frame. That judge then
+  rewarded the path fed camera motion (0.0033 against three-fed 0.0165), even
+  though that path's SSAA error was the worst (0.0257). Judged through the
+  node, the same runs reproduce §5's table exactly: native 0.0038, bilinear
+  0.0030, spatial 0.0049, temporal 0.0017, fed camera motion 0.0022. The
+  judge must be the most correct motion available, the same one for every
+  output compared, and never the motion one of the compared outputs was
+  built from. The README says so now.
+- **Sharing one MRT** with the node shifts three's velocity only at the
+  rounding level: the audit's mean residual moves by at most 3 × 10⁻⁷, and
+  near-threshold pixels by at most 78 of 921,600 per frame.
+
+## 11. What's worth building next
 
 The agreed spec and phased plan, with decision gates and the intended split
 into its own package, is [PLAN.md](PLAN.md).
@@ -552,17 +589,19 @@ ships.
    Phase 1 (§7) changed the signal: key it on the depth-consistency share
    (pixels no motion candidate can reproject), not the luma histogram, which
    misses cuts inside one scene and fires on flashes. Built on the GPU in
-   Phase 3 (§9): ~30 µs, no readback, a 1×1 flag. What's left is the upscaler
-   reading that flag in its accumulate pass, behind an option (Phase 4). Its
-   own disocclusion pass may already hold most of this signal.
+   Phase 3 (§9): ~30 µs, no readback, a 1×1 flag. The upscaler bench resets on
+   it via readback (§10). What's left is the upscaler reading the flag in its
+   accumulate pass, behind an option, after 0.x (PLAN.md gate P). Its own
+   disocclusion pass may already hold most of this signal.
 2. **A depth-only motion mode** (`velocity` omitted → camera motion from depth)
    for static scenes. `MotionFromDepthPass` now supplies that motion for three
    (§9); what's left is the consumer's option, the saved MRT and vertex cost
    measured, and the object-motion limit documented.
 3. **Warping error in the bench tooling**, as a motion counterpart to the
    still-scene convergence meters, so regressions under motion stop depending
-   on eyeballing. `WarpingError` is built (§9); what's left is the upscaler
-   bench running it per path (Phase 4).
+   on eyeballing. The upscaler bench runs it per path, judged through the node
+   (§10). What's left is wiring it into the upscaler's regular benchmark
+   runs.
 4. **File upstream #17/#18** with this lab as the repro.
 5. **Optical flow (FidelityFX OF port)** is now justified only for what §2's
    shadow case shows: shading motion and inputs with no velocity at all

@@ -289,7 +289,11 @@ Passed 2026-11-18: cuts since 2026-11-17 (CI's `cuts` shard), warping error
 and its cost measured on 2026-11-18.
 
 ### Phase 4: consumers (size: M)
-- The upscaler bench consumes the node and the cut flag from a packed tarball (not a link).
+- ~~The upscaler bench consumes the node and the cut flag from a packed tarball (not a link).~~
+  Done (2026-11-18, pmndrs/upscaler#110, MOTION.md §10): the node renders
+  correctly on three r186.1, and the cut detector fires on Q10's cut with 0
+  false positives in 1,237 frames. Warping error is judged through the node,
+  because camera motion as the judge rewarded the output built from it.
 - The denoiser does the same.
 - Run the audit on Babylon's velocity with the deformers scene.
 - File upstream #17/#18 with the lab as the repro
@@ -349,6 +353,7 @@ ships from there.
 | 2026-11-15 | pixi-3d adapter on the public API (material field per tracked mesh); engine-side asks drafted in PIXI.md | Built, experimental; asks filed upstream as pixijs/3d#50–54 |
 | 2026-11-17 | Cut detection ships as `CutDetector`: GPU-only, 1×1 flag, own two-counter reduction (no downsampler) | Done (MOTION.md §9) |
 | 2026-11-17 | three apps get motion from depth and cuts through one `/three` class, `MotionFromDepthPass`; the lab runs it and every run bars it against the audit | Done (MOTION.md §9) |
+| 2026-11-18 | The upscaler bench consumes the package from a tarball committed to that repo (private until 0.x); warping error is judged through the most correct motion, never through what a compared output was built from | Done (MOTION.md §10) |
 | 2026-11-18 | Warping error ships as `WarpingError` (one field, contract `.w` mask, own history); the lab bars it against the audit and checks it ranks motion fields like the oracle | Done (MOTION.md §9) |
 | 2026-11-17 | `.z` = `MotionFlag` (0 no surface, 1 exact, 2 camera only, 3 rigid, 4 no previous); `.w` = previous view-space linear depth, 0 when not available | Done (CONTRACT.md) |
 | 2026-11-14 | D1: `positionNode` previous is feasible (graph rebuilt with substituted leaves) | Done (MOTION.md §8) |

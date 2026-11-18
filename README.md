@@ -131,9 +131,14 @@ device.queue.submit([encoder.finish()]);
 const { meanError, scored, occluded } = await warping.read();
 ```
 
-- `motion` is any field in the contract format ([CONTRACT.md](CONTRACT.md)).
-  Its `.w` is what the mask compares against, so use a field that fills it
-  (`MotionVectors`, `MotionFromDepthPass.motion`).
+- `motion` is the judge: any field in the contract format
+  ([CONTRACT.md](CONTRACT.md)) whose `.w` is filled, since the mask compares
+  against it. Use the most correct motion you have, `MotionVectors` in three,
+  and use the same judge for everything you compare. Camera motion
+  (`MotionFromDepthPass.motion`) is a judge for static scenes only: it calls
+  a moving object still, and when the object moves along the view axis the
+  mask can't catch it, so it rewards outputs built from that same wrong motion
+  ([docs/MOTION.md](docs/MOTION.md) §10).
 - `linearDepth` is this frame's linear depth, e.g. `MotionFromDepthPass.linearDepth`.
   Without it nothing is masked.
 - The image can be at display resolution and the motion and depth at render
