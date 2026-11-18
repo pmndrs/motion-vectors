@@ -88,7 +88,7 @@ itself, but none of its real motion either) and flag 3.
 | three (WebGPU) | NDC current − previous, y up | `(0.5, −0.5)` | three's own `velocity` breaks the contract on deformation, on frame history and on jitter after a runtime switch; see "Conformance". `@pmndrs/motion-vectors/three`'s node is the contract: flag 1, 3 where a `positionNode` reads a texture, buffer or storage the author didn't describe (`MotionVectors.setPreviousPosition`), 4 on an object's first frame back. |
 | raw WebGPU (motion from depth) | the contract | `(0.5, −0.5)` | Exact for static geometry; zero for object motion. Flags 2 on surfaces, 0 on the depth's clear value (with the far plane's camera motion in `.xy`, so a sky still reprojects), 4 on the first frame and behind the previous camera. |
 | pixi-3d (WebGPU) | `velocityOutput`: UV delta current − previous, v along the texture rows, camera motion only, `rg16float` clamped to ±1 | `(0.5, −0.5)` for `@pmndrs/motion-vectors/pixi`'s `motionOutput`, which is the contract | The adapter adds object motion for tracked meshes and is exact on rigid motion within one f16 step ([docs/PIXI.md](docs/PIXI.md)). Flags 1 on tracked meshes, 3 on tracked skinned or morphing ones, 2 elsewhere, 4 on a tracked mesh's first frame back. `.w` is exact under a perspective camera and 0 under an orthographic one. A second render of a camera in one frame reads no camera motion (pixi-3d's history is per render), and a camera's first frame reads flag 2 with zero motion, not 4: the adapter can't see pixi-3d's camera history. |
-| Babylon (WebGPU) | linear `0.5 · (previous − current)`, render targets Y-flipped | `(−1, −1)` | From the upscaler's [engine-contract.md](https://github.com/pmndrs/upscaler/blob/main/docs/engine-contract.md) and [babylon.md](https://github.com/pmndrs/upscaler/blob/main/docs/babylon.md). The audit has not been run on Babylon yet. |
+| Babylon (WebGPU) | linear `0.5 · (previous − current)` in NDC (three's value is `−2×` it), render targets Y-flipped | `(−1, −1)` | Convention from the upscaler's [engine-contract.md](https://github.com/pmndrs/upscaler/blob/main/docs/engine-contract.md) and [babylon.md](https://github.com/pmndrs/upscaler/blob/main/docs/babylon.md); the NDC relation is confirmed by the audit (docs/MOTION.md §11, Babylon 9.31.0). Babylon's velocity is exact on camera and rigid motion and never reports deformation as motion. It breaks the contract on deformation motion (reads zero), on skinning under bone textures (the default on WebGPU: bone motion reads zero), on several renders per engine frame (object history), and on a mesh's first frame after not being drawn (a stale matrix, where the contract wants flag 4). No `.z`/`.w`: there is no Babylon producer of the full contract yet (PLAN.md Phase 5). |
 
 ## Conformance
 
@@ -139,4 +139,6 @@ and is exact at one render per tick only (docs/MOTION.md §8).
   also inferred when nothing drives it.~~ Both (three node): `beginFrame()`
   when called, three's frame counter otherwise. Several renders per frame need
   `beginFrame()`.
-- Babylon and pixi rows: run the audit before claiming either.
+- ~~Babylon and pixi rows: run the audit before claiming either.~~ Both audited:
+  pixi-3d through `npm run check:pixi` (docs/PIXI.md), Babylon through
+  `npm run audit:babylon` (docs/MOTION.md §11).

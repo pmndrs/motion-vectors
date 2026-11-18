@@ -24,7 +24,7 @@ try {
     const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 
     for (const file of packed.files.map((entry) => entry.path))
-        if (!/^(dist\/|CONTRACT\.md$|README\.md$|LICENSE$|package\.json$)/.test(file)) problems.push(`unexpected file in the tarball: ${file}`);
+        if (!/^(dist\/|CONTRACT\.md$|CHANGELOG\.md$|README\.md$|LICENSE$|package\.json$)/.test(file)) problems.push(`unexpected file in the tarball: ${file}`);
     for (const [subpath, target] of Object.entries(manifest.exports)) {
         const targets = typeof target === 'string' ? [target] : Object.values(target);
         for (const file of targets) if (!existsSync(join(root, file))) problems.push(`exports["${subpath}"] → ${file} is missing`);

@@ -1,7 +1,7 @@
 # @pmndrs/motion-vectors
 
-**Experimental, unpublished.** Motion vectors for any WebGPU pipeline, and a way
-to prove they are right.
+**Alpha (0.1.0).** Motion vectors for any WebGPU pipeline, and a way to prove
+they are right.
 
 Temporal techniques (upscaling, TAA, denoising, GI history) reproject last
 frame through motion vectors. When those vectors are wrong, history smears or
@@ -21,6 +21,14 @@ must mean and measures any source against it.
   `WebGPURenderer` that is exact where three's is not: `positionNode`
   deformation, morph targets, `displacementMap`, several renders per frame
   ([docs/MOTION.md](docs/MOTION.md) §8).
+
+```bash
+npm install @pmndrs/motion-vectors
+```
+
+`three` (`>=0.186.0`), `pixi.js` and `@pixi/3d` are optional peers: install the
+one your adapter needs. The root and `/webgpu` need none. Changes:
+[CHANGELOG.md](CHANGELOG.md).
 
 ## three
 
@@ -188,6 +196,14 @@ against analytic motion on the GPU. Why each tracked mesh needs its own material
 and what pixi-3d could add to remove that, is in
 [docs/PIXI.md](docs/PIXI.md).
 
+## Babylon.js
+
+No adapter yet. Babylon's own velocity is exact on camera and rigid motion
+and never reports deformation as motion. It misses deformation motion and,
+under its default bone texture, skinning. It also goes stale on a second
+render per engine frame and on a mesh's first frame after it wasn't drawn.
+`npm run audit:babylon` measures it ([docs/MOTION.md](docs/MOTION.md) §11).
+
 ## Examples
 
 ```bash
@@ -224,7 +240,7 @@ Results land in `results/<label>/` (gitignored).
 npm run typecheck && npm test && npm run build && npm run verify:pack
 ```
 
-Three.js is an optional peer (≥ 0.184); development pins **0.187.0**.
+Three.js is an optional peer (≥ 0.186); development pins **0.187.0**.
 Incubated in [pmndrs/upscaler](https://github.com/pmndrs/upscaler); the history
 came with it. Status, phases and gates: [docs/PLAN.md](docs/PLAN.md).
 

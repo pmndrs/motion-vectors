@@ -1,10 +1,12 @@
 {
     "name": "@pmndrs/motion-vectors",
-    "version": "0.0.0",
-    "private": true,
+    "version": "0.1.0",
     "description": "Motion vectors for any WebGPU pipeline: a written contract, camera motion from depth, an exact oracle-based audit of an engine's velocity, and cut detection. Engine agnostic, with a three.js adapter.",
     "type": "module",
     "license": "MIT",
+    "publishConfig": {
+        "access": "public"
+    },
     "repository": {
         "type": "git",
         "url": "git+https://github.com/pmndrs/motion-vectors.git"
@@ -30,7 +32,8 @@
     "files": [
         "dist",
         "!dist/**/*.map",
-        "CONTRACT.md"
+        "CONTRACT.md",
+        "CHANGELOG.md"
     ],
     "main": "./dist/index.js",
     "module": "./dist/index.js",
@@ -79,12 +82,13 @@
         "measure": "node scripts/measure-motion.mjs",
         "check:gpu": "node scripts/measure-motion.mjs --experiments oracle,cases,jitter,node --check",
         "verify:pack": "node scripts/verify-pack.mjs",
-        "check:pixi": "node scripts/check-pixi.mjs"
+        "check:pixi": "node scripts/check-pixi.mjs",
+        "audit:babylon": "node scripts/audit-babylon.mjs"
     },
     "peerDependencies": {
-        "three": ">=0.186.0",
         "@pixi/3d": ">=0.1.0",
-        "pixi.js": "^8.23.0"
+        "pixi.js": "^8.23.0",
+        "three": ">=0.186.0"
     },
     "peerDependenciesMeta": {
         "three": {
@@ -98,6 +102,7 @@
         }
     },
     "devDependencies": {
+        "@babylonjs/core": "9.31.0",
         "@pixi/3d": "0.1.0",
         "@types/three": "0.187.0",
         "@webgpu/types": "^0.1.64",
