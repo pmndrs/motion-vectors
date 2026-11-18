@@ -15,7 +15,7 @@ export function getGPUTexture(renderer: THREE.WebGPURenderer, texture: THREE.Tex
     const backend = (renderer as unknown as { backend: { get(object: object): { texture?: GPUTexture } | undefined } }).backend;
     const gpuTexture = backend.get(texture)?.texture;
     if (!gpuTexture)
-        throw new Error(`motion lab: no GPUTexture behind "${texture.name || texture.uuid}"; render to it or initTexture() it first.`);
+        throw new Error(`motion-vectors: no GPUTexture behind "${texture.name || texture.uuid}"; render to it or initTexture() it first.`);
     return gpuTexture;
 }
 

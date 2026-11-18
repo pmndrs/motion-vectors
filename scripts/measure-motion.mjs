@@ -429,6 +429,24 @@ const CUT_THRESHOLDS = { emd: 0.5, depth: 0.2 };
 /** The one cut whose history stays valid (MOTION.md §7): the detector rightly keeps it. */
 const CUT_KEEPS_HISTORY = new Set(['cut-sky']);
 
+/**
+ * The GPU cut counts (the lab's `MotionFromDepthPass`) against the audit's
+ * (the analyzer's own motion from depth, same test), in pixels; `null` when a
+ * frame lacks either.
+ */
+function cutParity(frame) {
+    const depth = frame.cutDepth;
+    const gpu = frame.cutGpu;
+    if (!depth || !gpu) return null;
+    // Background (no surface) is left out of both counts; shares × pixels are integers.
+    const inconsistent = depth.noneValid - depth.backgroundUnscored;
+    const surface = 1 - depth.background;
+    return Math.max(
+        Math.abs(Math.round(inconsistent * depth.pixels) - gpu.inconsistentPixels),
+        Math.abs(Math.round(surface * depth.pixels) - gpu.surfacePixels),
+    );
+}
+
 async function cuts(run, screenshot) {
     const result = await run({ scene: 'cuts' });
     const series = result.frames.map((frame) => {
@@ -440,15 +458,8 @@ async function cuts(run, screenshot) {
         // shot was off-screen in the old camera. Under 5 % surface: no verdict.
         const surface = 1 - background;
         const inconsistent = depth ? depth.noneValid - depth.backgroundUnscored : 0;
-        // The GPU detector's counts against the audit's, in pixels (shares × pixels are integers).
         const gpu = frame.cutGpu;
-        const parity =
-            depth && gpu
-                ? Math.max(
-                      Math.abs(Math.round(inconsistent * depth.pixels) - gpu.inconsistentPixels),
-                      Math.abs(Math.round(surface * depth.pixels) - gpu.surfacePixels),
-                  )
-                : null;
+        const parity = cutParity(frame);
         return {
             frame: frame.frame,
             segment: frame.segment,
@@ -620,7 +631,12 @@ async function main() {
             );
             if (result.exceptionDetails)
                 throw new Error(`${result.exceptionDetails.exception?.description ?? result.exceptionDetails.text}\n${logs(client).slice(-40).join('\n')}`);
-            return result.result.value;
+            // Every run checks the three helper (motion from depth from three's camera,
+            // jitter included) against the audit, pixel for pixel.
+            const value = result.result.value;
+            const parity = Math.max(0, ...value.frames.map((frame) => cutParity(frame) ?? 0));
+            if (parity !== 0) failures.push(`MotionFromDepthPass (${request.scene}): cut counts differ from the audit's by up to ${parity} pixel(s)`);
+            return value;
         };
         const screenshot = async (name) => {
             if (cli.check) return; // nothing is presented in a check run
