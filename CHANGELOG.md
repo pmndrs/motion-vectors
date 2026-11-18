@@ -16,6 +16,13 @@ against.
   motion, and the per-engine conventions, with conformance bars measured
   against an exact oracle.
 
+### Package
+
+- ESM, TypeScript declarations, `sideEffects: false`. One dependency,
+  `@webgpu/types` (types only), so the `/webgpu` and `/three` declarations
+  compile in a consumer without extra installs. `three`, `pixi.js` and
+  `@pixi/3d` are optional peers.
+
 ### `@pmndrs/motion-vectors`
 
 - Contract constants (`MOTION_SCALE`, `MotionFlag`), cut-decision math
