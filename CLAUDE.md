@@ -69,6 +69,9 @@ workflow's header and PLAN.md gate P.
    The pixi check renders into a `RenderTexture` for the same reason, and never
    passes pixi's `resizeTo`: that option renders to the canvas inside
    `app.init()`. In check mode any canvas present throws, so a Mac run catches it.
+   Babylon takes a swapchain image in `initAsync` already, so the Babylon audit
+   page (`?present=0`, always passed by its driver) hands it a plain device
+   texture from `GPUCanvasContext.getCurrentTexture`.
 10. **Metal's f32 → f16 render-target conversion doesn't round to nearest.** An
     exact motion reads up to one f16 step off (0.02 px at 28 px of motion);
     pixi-3d's own exact camera velocity shows the same step. Compare stored

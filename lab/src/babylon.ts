@@ -95,6 +95,34 @@ const WIDTH = Number(query.get('width') ?? 1280);
 const HEIGHT = Number(query.get('height') ?? 720);
 const FPS = 60;
 
+// `?present=0` (the driver always passes it): nothing reaches a real canvas
+// swapchain. Headless Linux Chrome loses the WebGPU instance at the first
+// swapchain image on SwiftShader (CLAUDE.md landmine 9), and Babylon takes one
+// already in `initAsync`. The canvas context hands out a plain device texture
+// instead, so every platform runs the path CI runs.
+if (query.get('present') === '0') {
+    const configs = new WeakMap<GPUCanvasContext, { config: GPUCanvasConfiguration; texture?: GPUTexture }>();
+    GPUCanvasContext.prototype.configure = function (config: GPUCanvasConfiguration) {
+        configs.get(this)?.texture?.destroy();
+        configs.set(this, { config });
+    };
+    GPUCanvasContext.prototype.getCurrentTexture = function () {
+        const entry = configs.get(this);
+        if (!entry) throw new Error('babylon audit: getCurrentTexture before configure');
+        const { width, height } = this.canvas;
+        if (!entry.texture || entry.texture.width !== width || entry.texture.height !== height) {
+            entry.texture?.destroy();
+            entry.texture = entry.config.device.createTexture({
+                label: 'babylon-audit-backbuffer',
+                size: { width, height },
+                format: entry.config.format,
+                usage: (entry.config.usage ?? 0) | GPUTextureUsage.RENDER_ATTACHMENT,
+            });
+        }
+        return entry.texture;
+    };
+}
+
 //* Engine
 const canvas = document.getElementById('canvas') as HTMLCanvasElement;
 const engine = new WebGPUEngine(canvas, { antialias: false, adaptToDeviceRatio: false });

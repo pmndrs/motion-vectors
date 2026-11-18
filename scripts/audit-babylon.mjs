@@ -91,7 +91,7 @@ async function main() {
         const created = await fetch(`${cdpBase}/json/new?about:blank`, { method: 'PUT' }).then((response) => response.json());
         client = await CDP.connect(created.webSocketDebuggerUrl);
         await Promise.all([client.send('Page.enable'), client.send('Runtime.enable'), client.send('Log.enable')]);
-        await client.send('Page.navigate', { url: `${server.origin}/babylon.html?width=${width}&height=${height}` });
+        await client.send('Page.navigate', { url: `${server.origin}/babylon.html?width=${width}&height=${height}&present=0` });
         for (let attempt = 0; ; attempt++) {
             if ((await client.evaluate('window.__babylonAudit?.ready === true')) === true) break;
             if (attempt > 600) throw new Error(`Timed out waiting for the Babylon audit page.\n${logs(client).join('\n')}`);

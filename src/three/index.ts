@@ -1,3 +1,4 @@
+/// <reference types="@webgpu/types" preserve="true" />
 /**
  * `@pmndrs/motion-vectors/three`: motion vectors for three.js `WebGPURenderer`
  * (docs/PLAN.md §3.2) and the glue that publishes textures as three textures.

@@ -5,11 +5,14 @@
  * contract ships, no import names another package of ours or a relative path
  * that escapes `dist/`, each engine is imported only from its own subpath
  * (`three` from `/three`, `@pixi/3d` and `pixi.js` from `/pixi`), and the
- * engine-free entries import in plain Node.
+ * engine-free entries import in plain Node. Then a fresh consumer installs the
+ * tarball with each engine at the versions this repo develops against and
+ * typechecks every entry with `skipLibCheck` off (`--no-consumer` skips it; it
+ * needs the npm registry).
  * Runs nothing on the GPU.
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -51,6 +54,55 @@ try {
         if (Object.keys(module).length === 0) problems.push(`${entry} exports nothing`);
     }
     console.log(`${packed.filename}: ${packed.files.length} files, ${packed.size} bytes packed`);
+
+    // A consumer's typecheck: our declarations must compile with nothing but the
+    // package, its dependencies and the engine the subpath names installed.
+    if (!process.argv.includes('--no-consumer')) {
+        const consumer = join(work, 'consumer');
+        mkdirSync(consumer);
+        writeFileSync(join(consumer, 'package.json'), JSON.stringify({ name: 'consumer', private: true, type: 'module' }));
+        const dev = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).devDependencies;
+        const engines = ['three', '@types/three', 'pixi.js', '@pixi/3d', 'typescript'].map((name) => `${name}@${dev[name]}`);
+        execFileSync('npm', ['install', '--no-audit', '--no-fund', '--loglevel=error', join(work, packed.filename), ...engines], { cwd: consumer, stdio: 'pipe' });
+        // One program per subpath: an engine's own declarations can pull in globals
+        // (pixi.js references @webgpu/types), which would hide a gap in ours.
+        const programs = {
+            'webgpu.ts': [
+                "import { MOTION_SCALE, MotionFlag } from '@pmndrs/motion-vectors';",
+                "import { CutDetector, MotionAnalyzer, MotionFromDepth, WarpingError, type TextureAllocator } from '@pmndrs/motion-vectors/webgpu';",
+                'export const entries = [MOTION_SCALE, MotionFlag.Exact, CutDetector, MotionAnalyzer, MotionFromDepth, WarpingError];',
+                'export type Allocator = TextureAllocator;',
+            ],
+            'three.ts': [
+                "import { MotionFromDepthPass, MotionVectors } from '@pmndrs/motion-vectors/three';",
+                'export const entries = [MotionFromDepthPass, MotionVectors];',
+            ],
+            'pixi.ts': [
+                "import { MotionVectors, motionOutput } from '@pmndrs/motion-vectors/pixi';",
+                'export const entries = [MotionVectors, motionOutput];',
+            ],
+        };
+        const tsc = join(consumer, 'node_modules', 'typescript', 'bin', 'tsc');
+        const ours = [];
+        for (const [name, lines] of Object.entries(programs)) {
+            writeFileSync(join(consumer, name), `${lines.join('\n')}\n`);
+            // `types: []`: no ambient @types, so only what our declarations reference is in scope.
+            const config = `tsconfig.${name}.json`;
+            const compilerOptions = { noEmit: true, strict: true, module: 'nodenext', moduleResolution: 'nodenext', target: 'es2022', lib: ['es2022', 'dom'], types: [] };
+            writeFileSync(join(consumer, config), JSON.stringify({ compilerOptions, files: [name] }));
+            let output = '';
+            try {
+                execFileSync(process.execPath, [tsc, '-p', config], { cwd: consumer, encoding: 'utf8', stdio: 'pipe' });
+            } catch (error) {
+                output = `${error.stdout ?? ''}${error.stderr ?? ''}`;
+            }
+            // Every error counts except those inside an engine's own declarations.
+            const errors = output.split('\n').filter((line) => /error TS\d+/.test(line));
+            ours.push(...errors.filter((line) => !/^node_modules\//.test(line) || /^node_modules\/@pmndrs\/motion-vectors\//.test(line)).map((line) => `${name}: ${line}`));
+        }
+        for (const line of ours) problems.push(`consumer typecheck: ${line}`);
+        if (!ours.length) console.log(`consumer typecheck: ok (${engines.join(', ')})`);
+    }
 } finally {
     rmSync(work, { recursive: true, force: true });
 }

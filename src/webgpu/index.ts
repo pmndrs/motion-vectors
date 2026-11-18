@@ -1,3 +1,4 @@
+/// <reference types="@webgpu/types" preserve="true" />
 /**
  * `@pmndrs/motion-vectors/webgpu`: the engine-free products on a bare
  * `GPUDevice` (camera motion from depth, cut detection, warping error, the

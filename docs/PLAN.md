@@ -130,7 +130,10 @@ build. The downsampler's shape is the template:
 | `@pmndrs/motion-vectors/babylon`, `/pixi` | Later (§6, Phase 5) |
 
 - No runtime dependencies except `@pmndrs/downsampler` (§3.6), added in the
-  change that first imports it. `three` (and later `@babylonjs/core`, `pixi.js`)
+  change that first imports it, and `@webgpu/types` (types only: the `/webgpu`
+  and `/three` declarations name `GPUDevice` and `GPUTexture`, and a consumer
+  must not need to install them; `verify:pack` typechecks a fresh consumer per
+  subpath). `three` (and later `@babylonjs/core`, `pixi.js`)
   are optional peers.
 - CI runs GPU tests on SwiftShader against CPU oracles, as the downsampler's does,
   next to the GPU-free unit tests. The real-GPU CDP harness (the lab) stays the
