@@ -96,6 +96,19 @@ export class MotionFromDepthPass {
         return this.fromDepth.motion.handle;
     }
 
+    /**
+     * This frame's linear depth (r32float, render resolution, view-space
+     * distance), once {@link update} or {@link encode} ran: what
+     * `WarpingError` keeps for its occlusion mask. Raw `GPUTexture`; replaced
+     * on resize.
+     */
+    get linearDepth(): GPUTexture {
+        // encode() ends the frame, which makes this frame's depth the "previous" one.
+        const depth = this.fromDepth.previousLinearDepth;
+        if (!depth) throw new Error('MotionFromDepthPass: no frame encoded yet.');
+        return depth;
+    }
+
     /** The cut verdict (1×1 rgba16float: r = reset 0/1, g = inconsistent share, b = surface share, a = had a previous frame), or `null` without cut detection. */
     get cutFlag(): THREE.StorageTexture | null {
         return this.cutDetector?.flag.handle ?? null;

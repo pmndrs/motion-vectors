@@ -22,9 +22,11 @@ No optical flow yet. That is deliberately gated on the results here (§8).
 | Oracle comparison | `src/webgpu/shaders/motionCompare.ts` | Per object id, endpoint error in render pixels of each candidate against an oracle rendered in the same pass (§7). |
 | `MotionFromDepth` | `src/webgpu/MotionFromDepth.ts` | The camera-motion pass as a product: matrices and depth history in, the contract texture and linear depth out (§9). |
 | Cut detector | `src/webgpu/CutDetector.ts`, `shaders/cutDetection.ts` | The depth-consistency share reduced to a 1×1 flag on the GPU, no readback (§9). |
+| `MotionFromDepthPass` | `src/three/MotionFromDepthPass.ts` | Motion from depth and the cut detector fed from a three depth texture and camera (§9). |
+| Warping error | `src/webgpu/WarpingError.ts`, `shaders/warpingError.ts` | §5's metric for benches: one motion field, its own history, the mask on the field's `.w` (§9). |
 | `MotionAnalyzer` | `src/webgpu/MotionAnalyzer.ts` | Engine-free orchestration of the lab's passes on a bare `GPUDevice` (its own copy of the `TextureAllocator` seam); motion from depth is a `MotionFromDepth` it owns. |
 | Motion lab | `lab/` | The package's own scenes (deformers, move-then-hold cases, water, a courtyard camera track and a cut timeline) with oracle materials. No upscaler. |
-| Lab driver | `scripts/measure-motion.mjs` | Experiments `oracle`, `deformers`, `cases`, `ticks`, `jitter`, `water`, `track`, `cuts`, plus `probe`. |
+| Lab driver | `scripts/measure-motion.mjs` | Experiments `oracle`, `deformers`, `cases`, `ticks`, `jitter`, `water`, `track`, `cuts`, `warp`, `node`, `cost`, plus `probe`. |
 | Upscaler probe | in pmndrs/upscaler: `bench/motion-upscaler.html`, `scripts/measure-motion-upscaler.mjs` | The upscaler's consumer of the package: Q19/Q10 through native / bilinear / spatial / temporal (`audit-q19`, `warp`, `cut`). Stays in the upscaler. |
 
 ```bash
@@ -481,8 +483,62 @@ GPU time on Metal, 1280×720, median over the 569 cut-timeline frames: motion
 from depth 22.6 µs (22.5 µs before), cut detector 33.5 µs (29.8 µs before).
 The detector's shader didn't change; in the new layout motion from depth runs
 right before it in the same encoder, where before it ran in an earlier submit.
-Whether those 3–4 µs come from that layout or from the GPU not being quiet
-(means and maxima were higher in this run) isn't separated.
+Two later runs on a quiet GPU (2026-11-18) read 32.8 µs both times, so the
+rise is real, not noise; the layout is the likely cause, not yet isolated.
+
+### Warping error as an export (2026-11-18)
+
+`WarpingError` (`src/webgpu/WarpingError.ts`) is §5's metric as a product
+for benches: one contract motion field, the previous image warped
+(bilinear) onto the current one, the mean conditioned-luma difference. The
+mask is the field's own `.w` (the surface's previous linear depth) against
+last frame's linear depth at the previous position, so it holds for moving
+objects whenever the field fills `.w`. It keeps its own copies of the previous
+image and depth, sums the error in 64-bit fixed point, and reads back the mean
+plus the scored, over-threshold, masked, off-screen and no-previous shares.
+The audit (`motionResidual.ts`) stays the lab's multi-candidate tool.
+
+**Same test as the audit.** The lab runs it on camera motion from depth next
+to the audit, whose camera candidate is the same per-pixel test. Every lab
+run is barred on the two agreeing:
+
+| Run | Scored pixels | `over` (share of pixels) | Mean error |
+|---|---|---|---|
+| Metal, 1280×720, `oracle,cases,jitter,node,cuts,warp` | identical | ≤ 4.3 × 10⁻⁶ apart | ≤ 3.6 × 10⁻⁷ apart |
+| SwiftShader, 640×360, the same | identical | identical | identical |
+
+On Metal the two separately compiled shaders occasionally disagree on a pixel
+sitting exactly at the threshold or at a fixed-point .5. The bars allow 10⁻⁵
+of the pixels for `over` and 10⁻⁶ of mean error; scored pixels must match.
+
+**It ranks motion like the oracle, with no ground truth.** The `warp`
+experiment scores camera motion from depth, three's `velocity` and the node
+unmasked, so all three cover the same pixels (a mask would hide exactly the
+objects camera motion gets wrong). Pooled over each scene (error sum over
+scored pixels), Metal, 1280×720:
+
+| Scene | Camera motion | three's `velocity` | Node (exact, §8) |
+|---|---|---|---|
+| deformers (239 frames) | 0.00159 | 0.00612 | **0.00074** |
+| cases (149 frames) | 0.00072 | 0.00215 | **0.00013** |
+| water (239 frames) | **0.00132** | 0.00799 | 0.00136 |
+
+Every field scores 100 % of the pixels except three's on water (98.6 %). The
+node reads lowest wherever geometry carries the image: 2.1× below camera
+motion and 8.3× below three on the deformers, 5.5× and 17× on the cases.
+three's motion is worse than camera motion everywhere, as §2's endpoint
+errors predict. Water is the exception, and §7 explains it: the glints and
+ripples don't move with the surface, so exact geometric motion warps the image
+no better than camera motion (0.00136 vs 0.00132, the same as §7's audit). That
+is a property of the image, not a flaw in the motion, so the `--check` bars
+cover deformers and cases only: the node at most camera motion's error and at
+most three's. SwiftShader at 640×360 gives the same order everywhere (node
+0.00101 / 0.00029 / 0.00164). The experiment takes ~10 minutes there, so CI
+doesn't run it; CI's existing shards do run the agreement bars.
+
+**Cost:** 55.3 µs median (mean 54.7, p95 58.5) at 1280×720, Metal, two quiet
+runs (54.9 µs in the other). That covers the compute pass only, not the two
+history copies. It is a measurement, so a bench pays it only while measuring.
 
 ## 10. What's worth building next
 
@@ -505,7 +561,8 @@ ships.
    measured, and the object-motion limit documented.
 3. **Warping error in the bench tooling**, as a motion counterpart to the
    still-scene convergence meters, so regressions under motion stop depending
-   on eyeballing.
+   on eyeballing. `WarpingError` is built (§9); what's left is the upscaler
+   bench running it per path (Phase 4).
 4. **File upstream #17/#18** with this lab as the repro.
 5. **Optical flow (FidelityFX OF port)** is now justified only for what §2's
    shadow case shows: shading motion and inputs with no velocity at all

@@ -15,8 +15,8 @@ must mean and measures any source against it.
   semantics, unknowns) and the conformance bars.
 - **`@pmndrs/motion-vectors`**: contract constants and CPU reference math.
 - **`@pmndrs/motion-vectors/webgpu`**: engine-free GPU passes on a bare
-  `GPUDevice`: camera motion from depth, cut detection, a warp-residual audit,
-  an exact oracle comparison, luma histograms.
+  `GPUDevice`: camera motion from depth, cut detection, warping error, a
+  warp-residual audit, an exact oracle comparison, luma histograms.
 - **`@pmndrs/motion-vectors/three`**: a drop-in `velocity` for three.js
   `WebGPURenderer` that is exact where three's is not: `positionNode`
   deformation, morph targets, `displacementMap`, several renders per frame
@@ -109,6 +109,40 @@ else ([docs/MOTION.md](docs/MOTION.md) §9). It needs depth: inputs without it
 fall back to the luma histogram (`jensenShannon`, `earthMovers`). A three app
 uses `MotionFromDepthPass` (above). `cuts.read()` reads the verdict back if you
 reset on the CPU instead.
+
+## Warping error (benches)
+
+`WarpingError` measures temporal stability without a reference image. Each
+frame it warps the previous image onto the current one through a motion field
+and averages the luma difference. A depth mask leaves out disoccluded pixels.
+Flicker, smearing and ghosting under motion read higher; a stable output
+approaches the scene's own shading change. It's a measurement for benches and
+A/B runs, not a runtime feature.
+
+```ts
+import { WarpingError } from '@pmndrs/motion-vectors/webgpu';
+
+const warping = new WarpingError(device);
+await warping.init();
+
+// Per frame, after the image you're judging (e.g. an upscaler's output) exists:
+warping.encode(encoder, { current: outputTexture, motion: motionTexture, linearDepth });
+device.queue.submit([encoder.finish()]);
+const { meanError, scored, occluded } = await warping.read();
+```
+
+- `motion` is any field in the contract format ([CONTRACT.md](CONTRACT.md)).
+  Its `.w` is what the mask compares against, so use a field that fills it
+  (`MotionVectors`, `MotionFromDepthPass.motion`).
+- `linearDepth` is this frame's linear depth, e.g. `MotionFromDepthPass.linearDepth`.
+  Without it nothing is masked.
+- The image can be at display resolution and the motion and depth at render
+  resolution.
+- The class keeps its own copy of the previous image and depth, so `current`
+  needs `COPY_SRC`. `reset()` after a cut. `heat` takes an `rgba8unorm`
+  storage texture for a per-pixel map.
+- Read `meanError` together with `scored`: a field that leaves more pixels to
+  the mask covers less of the image.
 
 ## pixi-3d (experimental)
 
