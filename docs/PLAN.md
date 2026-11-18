@@ -3,7 +3,9 @@
 **Status (2026-11-18): Phase 2 (three node) in progress; D1 passed; the
 contract's `.z`/`.w` settled; pixi-3d adapter built (experimental,
 [PIXI.md](PIXI.md)); Phase 3 done: cut detection on the GPU keyed on depth
-consistency, motion from depth for three, warping error (MOTION.md §9).** Phases 0
+consistency, motion from depth for three, warping error (MOTION.md §9). Left
+before 0.1.0: Phase 2's open items, the Babylon audit (Phase 4) and release
+setup. Upstream issues are filed after 0.1.0 (Phase 5).** Phases 0
 and 1 ran incubating in [pmndrs/upscaler](https://github.com/pmndrs/upscaler);
 this repo took them over with their history and builds on three **r187**. The
 node meets every §4 oracle case (MOTION.md §8). It will
@@ -224,7 +226,7 @@ numbers next to each oracle (MOTION.md §7); nothing under `packages/motion`
 imports the upscaler. Finding that changes the spec: cut detection keys on
 depth consistency, not the histogram (§3.3).
 
-### Phase E: extraction (in progress, 2026-11-14)
+### Phase E: extraction (done, 2026-11-15)
 1. ✅ Scaffolded like the downsampler (§3.4, §5): one package, subpath exports,
    optional peer, CI with a SwiftShader conformance run.
 2. ✅ Moved `packages/motion`, MOTION.md and this plan **with history**: the three
@@ -232,14 +234,14 @@ depth consistency, not the histogram (§3.3).
    to those paths (original authors and dates kept).
 3. ✅ Moved to three r187 and re-ran every experiment on a real GPU (MOTION.md §7):
    Phase 1's numbers reproduce, except the two r187 fixed or changed.
-4. ⬜ First push and a green CI run.
+4. ✅ First push and a green CI run (every PR since #1 runs CI green).
 5. ✅ In the upscaler: dropped the lab, scripts and contract from `packages/motion`,
    kept `src/` frozen for its bench probe until 0.x is on npm
    ([pmndrs/upscaler#108](https://github.com/pmndrs/upscaler/pull/108)). The motion
    part of its `engine-contract.md` moves into CONTRACT.md then.
 
-**Exit:** this repo's CI is green and the lab reproduces Phase 1's numbers (met
-locally on Metal and SwiftShader); upscaler CI is green on the trimmed copy.
+**Exit (met):** this repo's CI is green and the lab reproduces Phase 1's numbers
+(Metal and SwiftShader); upscaler CI is green on the trimmed copy (#108 merged).
 
 ### ⛳ D1: is automatic `positionNode` previous feasible? (new repo, start of Phase 2)
 A time-boxed spike (about two days) on R6: clone a `positionNode` graph with
@@ -288,31 +290,46 @@ outside a Fn, per-frame textures and storage (R7/R8).
 Passed 2026-11-18: cuts since 2026-11-17 (CI's `cuts` shard), warping error
 and its cost measured on 2026-11-18.
 
-### Phase 4: consumers (size: M)
-- The upscaler bench consumes the node and the cut flag from a packed tarball (not a link).
-- The denoiser does the same.
-- Run the audit on Babylon's velocity with the deformers scene.
-- File upstream #17/#18 with the lab as the repro
-  ([UPSTREAM-CANDIDATES.md](https://github.com/pmndrs/upscaler/blob/main/docs/research/UPSTREAM-CANDIDATES.md)). r187
-  already fixed #18's projection half (MOTION.md §7).
+**Order (decided 2026-11-19):** every phase finishes and 0.1.0 (the alpha) is
+on npm before anything is posted upstream. Integrating it into other projects
+(the upscaler, the denoiser) is their work, on their schedules, not this
+plan's; their branches can serve as dev benches, as the upscaler's did.
 
-**Exit:** both consumers render correctly on the packed package; Babylon findings recorded.
+### Phase 4: pre-release checks (size: S)
+- ✅ A consumer dry run in the upscaler bench, from a packed tarball
+  (2026-11-18, MOTION.md §10, pmndrs/upscaler#110 as a dev bench): the node
+  renders correctly on three r186.1, and the cut detector fires on Q10's cut
+  with 0 false positives in 1,237 frames. Warping error is judged through the
+  node, because camera motion as the judge rewarded the output built from it.
+  That branch is the upscaler's to keep or drop.
+- Run the audit on Babylon's velocity with the deformers scene. Findings
+  recorded here; nothing posted.
+- ✅ Upstream issues drafted (#17/#18,
+  [upstream/three.md](upstream/three.md), tracked in
+  [upstream/README.md](upstream/README.md)). Filed in Phase 5.
 
-### ⛳ P: ready to publish 0.x (after Phase 4; review no later than **2026-12-15**, proposed)
+**Exit:** Babylon findings recorded.
+
+### ⛳ P: publish 0.1.0, the alpha (review no later than **2026-12-15**, proposed)
 
 Publish when all of these hold:
-1. Phase 2 and 3 exits passed.
-2. The contract (§3.1, including `.zw`) hasn't changed through Phase 4.
-3. Two consumers (upscaler, denoiser) integrated from a packed tarball.
-4. Costs measured for the node, cut detection and motion from depth.
-5. Upstream checked: anything three already fixed defers to three (R12).
+1. Phase 2, 3 and 4 exits passed.
+2. The contract (§3.1, including `.zw`) hasn't changed since the upscaler dry
+   run (Phase 4).
+3. Costs measured for the node, cut detection, motion from depth and warping
+   error.
+4. Upstream checked: anything three already fixed defers to three (R12).
+5. Release setup: `private` off, a publish workflow, npm access to the
+   `@pmndrs` scope.
 
-If one fails: name it, fix it, and set a new review date. The upscaler and the
-denoiser then take the published package as a **peer dependency** (R10), and any
-upscaler feature built on it (an auto-reset option, a depth-only motion mode)
-ships from there.
+If one fails: name it, fix it, and set a new review date.
 
-### Phase 5: after 0.x
+### Phase 5: after 0.1.0
+- Consumers (the upscaler, the denoiser) adopt it from npm as a **peer
+  dependency** (R10), in their own repos and on their own schedules. Not this
+  plan's work.
+- **File the upstream issues** ([upstream/README.md](upstream/README.md)),
+  linking this repo as the repro.
 - Babylon, pixi and raw-WebGPU adapters past their first versions (§3.7).
 - Retire node pieces as three fixes land upstream; keep the audit as the regression test.
 - ⛳ **D3: optical flow go/no-go.** On the water scene, a block-matching flow
@@ -349,10 +366,12 @@ ships from there.
 | 2026-11-15 | pixi-3d adapter on the public API (material field per tracked mesh); engine-side asks drafted in PIXI.md | Built, experimental; asks filed upstream as pixijs/3d#50–54 |
 | 2026-11-17 | Cut detection ships as `CutDetector`: GPU-only, 1×1 flag, own two-counter reduction (no downsampler) | Done (MOTION.md §9) |
 | 2026-11-17 | three apps get motion from depth and cuts through one `/three` class, `MotionFromDepthPass`; the lab runs it and every run bars it against the audit | Done (MOTION.md §9) |
+| 2026-11-19 | Every phase done and 0.1.0 on npm before any upstream post (Phase 5). Integrating it into the upscaler or the denoiser is theirs to do, not this plan's; their branches may serve as dev benches | Agreed |
+| 2026-11-18 | Upscaler bench dry run from a tarball (pmndrs/upscaler#110, a dev bench); warping error is judged through the most correct motion, never through what a compared output was built from | Done (MOTION.md §10) |
 | 2026-11-18 | Warping error ships as `WarpingError` (one field, contract `.w` mask, own history); the lab bars it against the audit and checks it ranks motion fields like the oracle | Done (MOTION.md §9) |
 | 2026-11-17 | `.z` = `MotionFlag` (0 no surface, 1 exact, 2 camera only, 3 rigid, 4 no previous); `.w` = previous view-space linear depth, 0 when not available | Done (CONTRACT.md) |
 | 2026-11-14 | D1: `positionNode` previous is feasible (graph rebuilt with substituted leaves) | Done (MOTION.md §8) |
-| — | P: publish 0.x | Pending (review by 2026-12-15, proposed) |
+| — | P: publish 0.1.0 (alpha) | Pending (review by 2026-12-15, proposed) |
 | — | D3: optical flow | Pending (Phase 5) |
 
 ## 9. Open questions
