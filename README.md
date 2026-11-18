@@ -45,10 +45,25 @@ renderer.setAnimationLoop(() => {
   Give it an `rgba16float` texture to keep `.zw`.
 - **Cuts:** `motion.reset()` makes the next frame report zero motion, flagged
   as no previous position.
-- **`positionNode`** graphs are re-evaluated with last frame's uniforms and
-  previous position automatically. Not covered yet: `toVar()` variables made
-  outside a `Fn`, textures or storage buffers that change per frame
+- **Deformation:** `positionNode` graphs are re-evaluated with last frame's
+  uniforms and previous position automatically, and so are morph targets and
+  `displacementMap` (with an animated scale or bias). Skinning, `InstancedMesh`
+  and `BatchedMesh` are exact too, skinning even with several renders per frame.
+- **What the node can't see:** a `positionNode` that reads a texture, buffer
+  or storage that changes per frame. The node can't know last frame's
+  contents, so those pixels report flag 3 (rigid: camera and object motion
+  only). If you know the previous position, say so:
+
+  ```ts
+  // positionPrevious = last frame's position before positionNode
+  MotionVectors.setPreviousPosition(material, positionPrevious.add(normalLocal.mul(lastFrameHeight)));
+  MotionVectors.setPreviousPosition(material, 'rigid'); // or: hold the deformation, flagged 3
+  ```
+
+  `toVar()` variables made outside a `Fn` aren't followed either
   (docs/MOTION.md §8).
+- **three releases:** r186 and r187 pass every lab bar. r185 doesn't: its own
+  instancing and batching history is wrong, and the node relies on it.
 
 ### Motion from depth and cut detection
 

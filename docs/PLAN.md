@@ -1,11 +1,11 @@
 # Motion vectors — spec and plan
 
-**Status (2026-11-18): Phase 2 (three node) in progress; D1 passed; the
+**Status (2026-11-19): Phase 2 (three node) done; D1 passed; the
 contract's `.z`/`.w` settled; pixi-3d adapter built (experimental,
 [PIXI.md](PIXI.md)); Phase 3 done: cut detection on the GPU keyed on depth
 consistency, motion from depth for three, warping error (MOTION.md §9). Left
-before 0.1.0: Phase 2's open items, the Babylon audit (Phase 4) and release
-setup. Upstream issues are filed after 0.1.0 (Phase 5).** Phases 0
+before 0.1.0: the Babylon audit (Phase 4) and release setup. Supported:
+three `>=0.186.0`. Upstream issues are filed after 0.1.0 (Phase 5).** Phases 0
 and 1 ran incubating in [pmndrs/upscaler](https://github.com/pmndrs/upscaler);
 this repo took them over with their history and builds on three **r187**. The
 node meets every §4 oracle case (MOTION.md §8). It will
@@ -126,7 +126,9 @@ build. The downsampler's shape is the template:
 | `@pmndrs/motion-vectors/three` | The §3.2 node and a three texture allocator |
 | `@pmndrs/motion-vectors/babylon`, `/pixi` | Later (§6, Phase 5) |
 
-- No runtime dependencies. `three` (and later `@babylonjs/core`, `pixi.js`) are optional peers.
+- No runtime dependencies except `@pmndrs/downsampler` (§3.6), added in the
+  change that first imports it. `three` (and later `@babylonjs/core`, `pixi.js`)
+  are optional peers.
 - CI runs GPU tests on SwiftShader against CPU oracles, as the downsampler's does,
   next to the GPU-free unit tests. The real-GPU CDP harness (the lab) stays the
   acceptance oracle.
@@ -145,8 +147,11 @@ most likely means the `/three` node retires while the package stays.
 
 Motion needs image reductions and pyramids: the cut-detection histogram now, and
 a luma pyramid if optical flow lands (D3). That's the downsampler's job, so motion
-may depend on it (as a dependency, or vendored like its self-contained `/mipmap`
-file) rather than writing its own reductions.
+depends on it rather than writing its own reductions: `@pmndrs/downsampler` as an
+ordinary dependency (decided 2026-11-19; it is on npm, and `three` is an
+optional peer there too). Nothing imports it yet: the cut detector's reduction
+is two counters. The first product that needs a pyramid or a histogram (D3's
+flow pyramids) adds it.
 
 ### 3.7 Adapters
 
@@ -256,13 +261,23 @@ uniform for last frame's values; Fn bodies re-run, so their globals swap too.
 0.000 px on every lab `positionNode` case (MOTION.md §8). Limits: `toVar()`
 outside a Fn, per-frame textures and storage (R7/R8).
 
-### Phase 2: three velocity node (in progress, 2026-11-14)
-- `/three`: R1–R12. Built: R1–R6, R9, R10 (`MotionVectors`), each exact in the
-  lab; R11 measured (+19 µs / +5.4 % on the water swell, the rest within
-  noise). Open: R3 lab cases (skinned, instanced, batched), R7 author hook,
-  R12 per-case feature detection. R8's flag exists (`.z` = 3 for
-  per-instance morph influences); the R7 hook will set it for deformations
-  the node can't see.
+### Phase 2: three velocity node (done, 2026-11-19)
+- `/three`: R1–R12 (`MotionVectors`), each exact in the lab (MOTION.md §8,
+  "Phase 2 exit"). Finished 2026-11-19:
+  - **R3:** skinning, instancing and batching lab cases (`rigs` scene).
+  - **R1 for skinning:** the node keeps its own frame-keyed bones. three's
+    roll once per display refresh.
+  - **R7:** the author hook, `MotionVectors.setPreviousPosition`.
+  - **R8:** textures, buffers and storage in a `positionNode` are flagged 3
+    instead of breaking the material's build.
+  - **R9:** animated `displacementScale`/`displacementBias` (it used the
+    current scale for both frames).
+  - **R12:** the `upstream.ts` table, with node deferral and the `upstream`
+    check.
+  - **R11:** +2.1 % to +4.9 % on the lab scenes (median of 12 interleaved
+    repetitions).
+- **three range:** r186.1 and r187 pass every bar. r185.1 fails R3 (three's
+  own instancing and batching history), so the peer range is `>=0.186.0`.
 - ✅ Reserved channels settled (2026-11-17): every producer (node, motion from
   depth, pixi) writes `.z` and `.w`, and the lab and the pixi check bar both
   against the oracle (CONTRACT.md "Conformance").
@@ -271,7 +286,7 @@ outside a Fn, per-frame textures and storage (R7/R8).
   f16 step (`npm run check:pixi`, [PIXI.md](PIXI.md)). Skinning and morph report
   rigid motion until pixi-3d keeps previous bones and weights (PIXI.md, ask 2).
 
-**Exit:** every §4 case meets its oracle; the carried-over pass bars hold; the R11 cost is measured.
+**Exit (met 2026-11-19):** every §4 case meets its oracle; the carried-over pass bars hold; the R11 cost is measured.
 
 ### Phase 3: core products (done, 2026-11-18; size: M)
 - ~~Cut detection on the GPU with the 1×1 flag.~~ Done (MOTION.md §9): no
@@ -366,7 +381,9 @@ If one fails: name it, fix it, and set a new review date.
 | 2026-11-15 | pixi-3d adapter on the public API (material field per tracked mesh); engine-side asks drafted in PIXI.md | Built, experimental; asks filed upstream as pixijs/3d#50–54 |
 | 2026-11-17 | Cut detection ships as `CutDetector`: GPU-only, 1×1 flag, own two-counter reduction (no downsampler) | Done (MOTION.md §9) |
 | 2026-11-17 | three apps get motion from depth and cuts through one `/three` class, `MotionFromDepthPass`; the lab runs it and every run bars it against the audit | Done (MOTION.md §9) |
+| 2026-11-19 | Phase 2 done; peer range `three >= 0.186.0` (r185's own instancing and batching history is wrong, and the node defers both to three) | Done (MOTION.md §8) |
 | 2026-11-19 | Every phase done and 0.1.0 on npm before any upstream post (Phase 5). Integrating it into the upscaler or the denoiser is theirs to do, not this plan's; their branches may serve as dev benches | Agreed |
+| 2026-11-19 | `@pmndrs/downsampler` is a dependency (not vendored) for reductions and pyramids, added when a product first imports it | Agreed |
 | 2026-11-18 | Upscaler bench dry run from a tarball (pmndrs/upscaler#110, a dev bench); warping error is judged through the most correct motion, never through what a compared output was built from | Done (MOTION.md §10) |
 | 2026-11-18 | Warping error ships as `WarpingError` (one field, contract `.w` mask, own history); the lab bars it against the audit and checks it ranks motion fields like the oracle | Done (MOTION.md §9) |
 | 2026-11-17 | `.z` = `MotionFlag` (0 no surface, 1 exact, 2 camera only, 3 rigid, 4 no previous); `.w` = previous view-space linear depth, 0 when not available | Done (CONTRACT.md) |
@@ -380,5 +397,6 @@ If one fails: name it, fix it, and set a new review date.
   scoped like the upscaler and denoiser. `motion` alone collides with the Motion
   animation library; `reprojection` was the alternative for a broader scope.
   `@pmndrs/motion-vectors` was unpublished on npm that day; claim it at gate P.
-- **Downsampler as a dependency or vendored** for the reductions (§3.6)?
+- ~~Downsampler as a dependency or vendored?~~ Settled 2026-11-19: a
+  dependency, added when a product first needs it (§3.6).
 - **Second consumer order.** Is the denoiser the right first non-upscaler consumer, or is the GI work closer?

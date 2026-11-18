@@ -14,11 +14,13 @@ import {
     type CompareObjectStats,
     type ResidualStats,
 } from '../../src/webgpu/index.js';
+import { THREE_REVISION, UPSTREAM } from '../../src/three/upstream.js';
 import { Oracle, ORACLE_OUTPUT } from './oracle';
 import { createCases } from './scenes/cases';
 import { FPS, type LabScene, type SceneFactory } from './scenes/common';
 import { createCourtyard } from './scenes/courtyard';
 import { createDeformers } from './scenes/deformers';
+import { createRigs } from './scenes/rigs';
 import { createWater } from './scenes/water';
 
 /**
@@ -43,6 +45,7 @@ import { createWater } from './scenes/water';
 const SCENES: Record<string, SceneFactory> = {
     deformers: createDeformers,
     cases: createCases,
+    rigs: createRigs,
     water: createWater,
     track: createCourtyard('track'),
     cuts: createCourtyard('cuts'),
@@ -92,6 +95,8 @@ interface LabRequest {
     heatCandidate?: number;
     /** Also measure unmasked warping error through the engine's motion and camera motion (the `warp` experiment). */
     warp?: boolean;
+    /** Read back the last frame's engine `.z` flags per object (`flags` in the result): the contract's flag values, which the comparison doesn't separate. */
+    flags?: boolean;
 }
 
 interface FrameRecord {
@@ -145,13 +150,19 @@ const gpu = (target: THREE.Texture) => getGPUTexture(renderer, target);
 // lab stops that loop and advances the frame itself (rendersPerTick models
 // apps that render several times per tick).
 const internals = renderer as unknown as {
-    _animation?: { stop(): void };
+    _animation?: { start(): void; stop(): void };
     _nodes?: { nodeFrame?: { update(): void; time: number; deltaTime: number } };
 };
 const nodeFrame = internals._nodes?.nodeFrame;
 if (!internals._animation || typeof internals._animation.stop !== 'function' || !nodeFrame || typeof nodeFrame.update !== 'function')
     throw new Error('Pinned renderer._animation / _nodes.nodeFrame shape changed.');
 internals._animation.stop();
+// render() restarts that loop on every call (Renderer.render → _animation.start()),
+// and between the lab's awaits it then advances frameId whenever a display
+// refresh passes: per lab frame on a slow adapter, now and then on a fast one.
+// three's per-refresh history would then read exact or not by timing alone, so
+// the lab keeps the loop off and owns frameId.
+internals._animation.start = () => {};
 
 const camera = new THREE.PerspectiveCamera(50, 16 / 9, 0.1, 200);
 const analyzer = new MotionAnalyzer(device, createThreeTextureAllocator(renderer));
@@ -274,7 +285,7 @@ function present(view: LabView, color: THREE.Texture, width: number, height: num
     quad.render(renderer);
 }
 
-async function run(request: LabRequest): Promise<{ frames: FrameRecord[]; objects: Record<number, string>; segments: unknown }> {
+async function run(request: LabRequest): Promise<{ frames: FrameRecord[]; objects: Record<number, string>; segments: unknown; flags?: Record<string, Record<number, number>> }> {
     const width = request.width ?? 1280;
     const height = request.height ?? 720;
     const trap = request.velocityProjection === 'trap';
@@ -432,7 +443,32 @@ async function run(request: LabRequest): Promise<{ frames: FrameRecord[]; object
         if (trap) velocity.setProjectionMatrix(velocityProjection);
     }
     await device.queue.onSubmittedWorkDone();
-    return { frames, objects: lab.objects, segments: lab.segments };
+    const flags = request.flags ? await readFlags(lab.objects) : undefined;
+    return { frames, objects: lab.objects, segments: lab.segments, flags };
 }
 
-(window as unknown as { __motionLab: unknown }).__motionLab = { ready: true, scenes: Object.keys(SCENES), run };
+/**
+ * Counts the engine's `.z` values per object over the last rendered frame,
+ * keyed by the oracle's object id (`.z` = marker · 8 + id).
+ * @param objects - Object ids → names
+ * @returns Per object name: flag value → pixel count
+ */
+async function readFlags(objects: Readonly<Record<number, string>>): Promise<Record<string, Record<number, number>>> {
+    const { width, height } = target!;
+    const read = async (index: number) => {
+        const raw = (await renderer.readRenderTargetPixelsAsync(target!, 0, 0, width, height, index)) as Uint16Array;
+        return Float32Array.from(raw, (half) => THREE.DataUtils.fromHalfFloat(half));
+    };
+    const [engine, oracle] = [await read(1), await read(2)];
+    const counts: Record<string, Record<number, number>> = {};
+    for (let i = 0; i < width * height; i++) {
+        const code = Math.round(oracle[i * 4 + 2]);
+        if (code < 8) continue; // nothing drawn
+        const name = objects[code % 8] ?? `id-${code % 8}`;
+        const flag = Math.round(engine[i * 4 + 2]);
+        (counts[name] ??= {})[flag] = ((counts[name] ??= {})[flag] ?? 0) + 1;
+    }
+    return counts;
+}
+
+(window as unknown as { __motionLab: unknown }).__motionLab = { ready: true, scenes: Object.keys(SCENES), run, upstream: { revision: THREE_REVISION, cases: UPSTREAM } };

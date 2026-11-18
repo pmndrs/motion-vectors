@@ -177,8 +177,8 @@ residual (§2) stays for what the oracle can't see: shading motion.
 1280×720, no jitter unless stated. "Moved" is the oracle's mean motion; errors
 are means over the object's pixels (per-pixel errors capped at 64 px, so a capped
 mean is a lower bound). Measured on r186.1 in the upscaler repo, then re-run on
-**r187** here: every number below is identical on r187 except the two rows
-marked in "Frame history and jitter".
+**r187** here: every number below is identical on r187 except the jitter-trap
+row marked in "Frame history and jitter".
 
 ### What r187 changed (2026-11-14)
 
@@ -187,9 +187,11 @@ r187's `VelocityNode` reads `setProjectionMatrix()` on every frame (a
 each material's shader at build time. That fixes the jitter trap (0.364 → 0.000 px):
 the projection half of upstream candidate #18. Deformation is untouched
 (`positionPrevious` is still the raw geometry), so every deformation row is the
-same to the third decimal. Several renders per tick is still wrong, with a smaller
-error (10.55 / 23.93 → 8.76 / 14.44 px at 2 / 4 per tick); the reason for the
-drop wasn't re-derived. The conformance check passes on r187 on Metal and on
+same to the third decimal. Several renders per tick is unchanged (10.55 / 23.93 px
+at 2 / 4 per tick). An earlier r187 run read 8.76 / 14.44: the lab hadn't yet
+stopped three's own animation loop from advancing `frameId` between its renders
+(`render()` restarts that loop), so some renders got a fresh history by timing
+alone. The lab now owns `frameId` (2026-11-19). The conformance check passes on r187 on Metal and on
 SwiftShader (640×360).
 
 ### The oracle is right where three is known to be
@@ -228,8 +230,8 @@ held pose or a static displacement looks like fast motion forever.
 | Case | Moved | three | three > 0.25 px |
 |---|---|---|---|
 | Camera track, 1 render per tick | 7.47 px | 0.000 | 0 % |
-| 2 renders per tick (r186.1 / r187) | 7.47 | **10.55 / 8.76** | 98 / 85 % |
-| 4 renders per tick (r186.1 / r187) | 7.47 | **23.93 / 14.44** | 98 / 88 % |
+| 2 renders per tick | 7.47 | **10.55** | 98 % |
+| 4 renders per tick | 7.47 | **23.93** | 98 % |
 | Still scene, jitter switched on at frame 10, one stable matrix | 0 | 0.000 | 0 % |
 | Same, materials built under `setProjectionMatrix(null)` first (r186.1 / r187) | 0 | **0.364** / 0.000 | 90 / 0 % |
 
@@ -362,9 +364,12 @@ The node also reads 0.000 at one render per tick without `beginFrame()`.
   (once, page-wide, active only while an enabled `MotionVectors` exists and the
   MRT has a `velocity` output) by r187's own sequence with `positionPrevious`
   carried through morph targets (last frame's influences against a copy of the
-  position targets), `displacementMap` (the same offset both frames) and
-  `positionNode`. Skinning, batching and instancing run as three wrote them,
-  since they already move `positionPrevious` (R3).
+  position targets), `displacementMap` (last frame's scale and bias, the same
+  map; until 2026-11-19 the current scale stood in for both frames) and
+  `positionNode`. Batching and instancing run as three wrote them, since they
+  already move `positionPrevious` (R3, from r186). Skinning runs as three wrote
+  it, then the previous position is skinned again with the node's own
+  frame-keyed bones (2026-11-19, "Phase 2 exit" below).
 - **D1: `positionNode` re-evaluated at last frame's values.** Passed. The graph
   is built a second time inside a parentless node cache (so every expression is
   generated again), while a scoped hook in `Node.prototype.build` swaps
@@ -374,13 +379,13 @@ The node also reads 0.000 at one render per tick without `beginFrame()`.
   (`time`, user uniforms) are swapped too. It needs no annotation from the
   author: the lab's graphs are the plain ones apps write
   (`positionLocal.add(vec3(progress(time)…))`, `positionGeometry.add(swell(time))`).
-- **Not covered (R7/R8, next):** `toVar()` variables created outside a Fn
+- **Not covered (R7/R8):** `toVar()` variables created outside a Fn
   (three keeps variables in its global cache, so the previous build would read
-  the current one), textures and storage buffers that change per frame,
-  per-instance morph textures (`mesh.morphTexture`: rigid fallback), and
-  displacement on skinned or morphed meshes (current normal used for both
-  frames). Skinning, instancing and batching are three's own previous data and
-  aren't in the lab yet.
+  the current one), per-instance morph textures (`mesh.morphTexture`: rigid
+  fallback), and displacement on skinned or morphed meshes (current normal used
+  for both frames). Textures, buffers and storage in a `positionNode` are
+  flagged rigid unless the author supplies the previous position
+  (`MotionVectors.setPreviousPosition`, R7; "Phase 2 exit" below).
 
 ### Cost (R11)
 
@@ -411,6 +416,95 @@ exception is the re-entering ball: 327 pixels on its first frames back read
 4 (no previous position) where the oracle knows where it was. That is the
 honest answer for history kept per draw, and the bars exempt it. Motion from
 depth reads flag 2 and the exact previous depth on static geometry.
+
+### Phase 2 exit (2026-11-19)
+
+A new lab scene, `rigs` (`lab/src/scenes/rigs.ts`), covers what was left:
+skinning, instancing and batching (R3), a `positionNode` driven by a texture
+the CPU rewrites every frame (R7), and a static `displacementMap` whose scale
+grows (R9), all on the still → move → hold timeline. Every oracle computes its
+previous position from its own copy of last frame's bones, instance matrices,
+heights or scale, so none of three's bookkeeping reaches it. `npm run measure --
+--experiments rigs` runs three and the node at one and two renders per frame;
+it also reads back the node's `.z` per object, since the comparison only checks
+whether a previous position is claimed, not which flag. Metal, 1280×720, r187:
+
+| Object | Moved (px/frame) | three, 1 / 2 renders | Node, 1 / 2 renders | Node `.z` |
+|---|---|---|---|---|
+| Skinned limb, moving | 0.742 | 0.000 / 1.09 | **0.000 / 0.000** | 1 |
+| … holding | 0 | 0.000 / 0.028 | **0.000 / 0.000** | 1 |
+| `InstancedMesh`, moving | 1.445 | 0.000 / 0.000 | 0.000 / 0.000 | 1 |
+| `BatchedMesh`, moving | 1.452 | 0.000 / 0.000 | 0.000 / 0.000 | 1 |
+| Texture-driven `positionNode`, author's previous position | 0.037 | 0.47 | **0.000** | 1 |
+| … marked `'rigid'` | 0.008 | 0.10 | 0.008 (the deformation, left out) | 3 |
+| … no hook | 0.036 | 0.47 | 0.036 (the deformation, left out) | 3 |
+| `displacementMap`, scale growing / held | 0.051 / 0 | 3.17 / 5.18 | **0.000 / 0.000** | 1 |
+
+What changed in the node to get there:
+
+- **Skinning history (R1).** three keeps previous bones, but rolls them once
+  per display refresh (`frameId`), like its camera history. At two renders per
+  frame it also *draws* the stale pose: `skeleton.update()` runs once per
+  refresh too, so the second render repeats the first one's bones. The node now skins the previous position a second
+  time with its own frame-keyed bones (`PreviousBonesNode`), and the
+  `skeleton.update()` it runs once per frame puts the drawn pose right too.
+  Skeletons too large for a uniform buffer (more than 256 bones at 64 KB) keep
+  three's per-refresh history.
+- **A texture in a `positionNode` broke the material.** The rebuild swapped
+  every uniform for last frame's value, and a texture is a uniform in three; the
+  build failed ("Uniform null not implemented"), so the mesh didn't render at
+  all. The rebuild now swaps only value uniforms (numbers, vectors, colors,
+  matrices). When it meets a texture, buffer or storage node, it marks the
+  material's pixels flag 3 through a per-material uniform, so the order three
+  builds things in doesn't matter. That is CONTRACT.md's rule: what can't be
+  followed is flagged, not guessed.
+- **R7, the author hook:** `MotionVectors.setPreviousPosition(material,
+  node | 'rigid' | null)`. A node gives last frame's position (inside it,
+  `positionPrevious` is the position before `positionNode`); `'rigid'` holds the
+  deformation and flags 3. It is global, like the registry, so every renderer
+  and every installed copy sees it.
+- **R9 used the current scale for both frames.** An animated
+  `displacementScale` or `displacementBias` read no motion (0.051 px missed with
+  the old code on this case). Both now have frame-keyed history.
+
+**three releases.** The whole conformance run (every experiment above, `rigs`,
+`upstream` and `ticks` included) passes on **r186.1 and r187** on Metal, and the
+CI shards pass on SwiftShader at 640×360. r185.1 passes
+everything except R3: its own instancing history copies the previous matrices
+just before the draw (moving instances read zero motion, 1.445 px missed), and
+its `Batch.js` leaves batched `positionPrevious` at the raw geometry (each
+instance's whole offset reads as motion, 64+ px). The node leaves both to three,
+so the peer range is now `three >= 0.186.0`.
+
+**R12, deferring to three.** `src/three/upstream.ts` lists every case with the
+three release that made three's own `velocity` exact on it (`fixedIn`). The
+node defers a case once the running release is at or past it: morph targets
+first, because the node and three morphing `positionPrevious` would morph it
+twice. The new `upstream` experiment measures three's velocity on each case and
+fails when three's behaviour stops matching the table, which is the signal to
+retire a piece of the node. Mean error of three's own velocity per release:
+
+| Case | r185.1 | r186.1 | r187 | `fixedIn` |
+|---|---|---|---|---|
+| `positionNode` (R6, three issue 1) | 45.5 | 45.5 | 45.5 | open |
+| Morph targets (R5, issue 1) | 7.04 | 7.04 | 7.04 | open |
+| `displacementMap` (R9, issue 1) | 3.68 | 3.68 | 3.68 | open |
+| Camera history, 2 renders (R1, issue 2) | 5.39 | 5.39 | 5.39 | open |
+| Skinning history, 2 renders (R1, issue 2) | 0.45 | 0.45 | 0.45 | open |
+| Projection after a runtime switch (R2) | 0.364 | 0.364 | 0.000 | r187 |
+| Skinning, instancing, batching (R3) | 0.000 / 0.578 / 64+ | 0.000 | 0.000 | r185 / r186 / r186 |
+
+(Camera history here is the track's first 176 frames, so it differs from §7's
+whole-track numbers.) The history rows depend on the lab owning `frameId`:
+`render()` restarts three's own animation loop, which advances `frameId` on any
+display refresh that passes between the lab's renders. Before the lab disabled
+that restart, they read by timing alone: 2.35 and 0.38 on one r187 run, 0 on
+SwiftShader, where every lab frame outlasts a refresh.
+
+**Cost (R11), 12 interleaved repetitions:** deformers +7.0 µs (+2.5 % of a
+0.275 ms scene render), water +8.2 µs (+2.1 % of 0.385 ms), rigs +14.9 µs
+(+4.9 % of 0.301 ms, nine of twelve repetitions positive: the second skinning
+pass), track within noise. Every median is within the +5 % bar, rigs at its edge.
 
 ## 9. Phase 3: cut detection on the GPU (2026-11-17)
 
