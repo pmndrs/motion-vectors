@@ -298,7 +298,10 @@ and its cost measured on 2026-11-18.
 - Run the audit on Babylon's velocity with the deformers scene.
 - File upstream #17/#18 with the lab as the repro
   ([UPSTREAM-CANDIDATES.md](https://github.com/pmndrs/upscaler/blob/main/docs/research/UPSTREAM-CANDIDATES.md)). r187
-  already fixed #18's projection half (MOTION.md §7).
+  already fixed #18's projection half (MOTION.md §7). Drafted
+  ([upstream/three.md](upstream/three.md), tracked in
+  [upstream/README.md](upstream/README.md)); filing waits for 0.x on npm, so
+  the issues can link this repo.
 
 **Exit:** both consumers render correctly on the packed package; Babylon findings recorded.
 
