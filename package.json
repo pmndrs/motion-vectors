@@ -82,7 +82,7 @@
         "check:pixi": "node scripts/check-pixi.mjs"
     },
     "peerDependencies": {
-        "three": ">=0.184.0",
+        "three": ">=0.186.0",
         "@pixi/3d": ">=0.1.0",
         "pixi.js": "^8.23.0"
     },

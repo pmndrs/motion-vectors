@@ -50,6 +50,7 @@ Skinning, `InstancedMesh` and `BatchedMesh` are correct: they update
 | `positionNode` moves an object A→B / then holds at B | 3.12 / 0 | 3.12 / 0 | **51.9 / 64+** |
 | Morph target ramping 0→1 / then held at 1 | 0.19 / 0 | 0.19 / 0 | **5.70 / 11.6** |
 | Water swell (`positionNode` driven by time) | 0.39 | 0.39 | **11.8** |
+| `displacementMap` (static map, scale growing; whole run) | ≤ 0.05 | ≤ 0.05 | **3.68** |
 | Rigid rotating box (control) | 2.37 | 2.37 | 0.000 |
 
 On deformed geometry, `velocity` is worse than reporting no motion at all, by one
@@ -139,15 +140,20 @@ with the camera from the refresh before last. The error grows by about one frame
 of motion per extra render.
 
 Object history doesn't have this problem: `updateAfter()` hands it over on every
-draw.
+draw. Skinning does: `Skinning.js` rolls `skeleton.previousBoneMatrices` and
+calls `skeleton.update()` only when `frameId` changes. So a second render in
+one refresh reports stale bone motion, and it also *draws* the skeleton in the
+previous refresh's pose. On a limb bending 0.742 px/frame, two renders per
+refresh reported 1.09 px of velocity error.
 
 **Measured** (camera moving 7.47 px/frame, mean error in pixels)
 
 | Renders per refresh | `velocity` error | Pixels > 0.25 px off |
 |---|---|---|
 | 1 | 0.000 | 0 % |
-| 2 | **8.76** | 85 % |
-| 4 | **14.44** | 88 % |
+| 2 | **10.55** | 98 % |
+| 4 | **23.93** | 98 % |
+| 2, skinned limb (bone motion) | **1.09** | — |
 
 **Repro**
 

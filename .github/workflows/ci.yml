@@ -34,15 +34,25 @@ jobs:
   # the oracle and motion from depth must agree where three is exact. Real-GPU
   # numbers (docs/MOTION.md) come from local runs.
   conformance:
-    name: conformance (SwiftShader, ${{ matrix.experiments }})
+    name: conformance (SwiftShader, ${{ matrix.experiments }}${{ matrix.three && format(', three {0}', matrix.three) || '' }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # Shards in parallel: the oracle's full camera track alone is ~11 min on SwiftShader.
     # `cuts` checks the GPU cut detector against the audit and the cut timeline's truth.
+    # `rigs` holds skinning, instancing, batching (R3), the author hook (R7) and
+    # displacementMap (R9); `upstream` checks the node's table of what three
+    # handles per release (R12). The last shard repeats the node's bars on the
+    # oldest supported three (the peer range's floor).
     strategy:
       fail-fast: false
       matrix:
-        experiments: [oracle, 'cases,jitter,node', cuts]
+        include:
+          - experiments: oracle
+          - experiments: 'cases,jitter,node'
+          - experiments: cuts
+          - experiments: 'rigs,upstream'
+          - experiments: 'rigs,upstream,cases,node'
+            three: 0.186.1
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -50,6 +60,9 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Use three ${{ matrix.three }}
+        if: matrix.three
+        run: npm install --no-save three@${{ matrix.three }}
       # Chrome for Testing (current stable), as the downsampler's SwiftShader CI uses,
       # so runs don't drift with the runner image's preinstalled Chrome.
       - name: Install Chrome for Testing
