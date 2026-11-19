@@ -5,11 +5,30 @@ import {
     WARPING_FLAG_DEPTH_TEST,
     WARPING_FLAG_HEAT,
     WARPING_WORDS,
+    resolveWarpingResample,
+    warpingErrorShader,
+    type WarpingResample,
 } from './shaders/warpingError.js';
+
+/** Options fixed at construction. */
+export interface WarpingErrorOptions {
+    /**
+     * How the previous image is resampled at each pixel's previous position
+     * (default `'bilinear'`). Bilinear low-passes the previous image on any
+     * motion that isn't a whole number of pixels, so it reads sharp images as
+     * less stable than soft ones. `'catmull-rom'` cuts that bias 14–17× on
+     * smooth detail and 2–4× on fine detail (hard edges keep most of theirs
+     * with any filter) and is the choice for comparing outputs of different
+     * sharpness (docs/MOTION.md §9, "Resampling bias"). `'catmull-rom'` reads 16
+     * texels with `textureLoad`, so it also takes unfilterable formats
+     * (`rgba32float` without `float32-filterable`).
+     */
+    resample?: WarpingResample;
+}
 
 /** One frame's inputs to {@link WarpingError.encode}. */
 export interface WarpingRequest {
-    /** This frame's image (any filterable color format); sets the measured size. The next frame warps from a copy of it, so it needs `COPY_SRC`. */
+    /** This frame's image (a float-sampled color format, filterable for `'bilinear'`); sets the measured size. The next frame warps from a copy of it, so it needs `COPY_SRC`. */
     current: GPUTexture;
     /** The motion field to judge, in the contract format (CONTRACT.md): NDC current − previous, `.z` flag, `.w` previous linear depth. */
     motion: GPUTexture;
@@ -58,19 +77,26 @@ export interface WarpingResult {
  * stable one approaches the scene's own shading change. Measurement only: one
  * compute pass plus two texture copies a frame, and a readback.
  *
+ * The previous image is resampled bilinearly by default, which low-passes it
+ * under sub-pixel motion and so reads sharp images as less stable than soft
+ * ones; pass `{ resample: 'catmull-rom' }` to compare outputs of different
+ * sharpness (docs/MOTION.md §9, "Resampling bias").
+ *
  * Per frame, after the image and motion exist: {@link encode}, submit, then
  * optionally {@link read}. The class keeps its own copy of the previous image
  * and depth.
  */
 export class WarpingError {
     readonly device: GPUDevice;
+    /** How the previous image is resampled (fixed at construction). */
+    readonly resample: WarpingResample;
 
     private _pipeline: GPUComputePipeline | null = null;
     private readonly _constants: GPUBuffer;
     private readonly _counters: GPUBuffer;
     private readonly _result: GPUBuffer;
     private readonly _readback: GPUBuffer;
-    private readonly _sampler: GPUSampler;
+    private readonly _sampler: GPUSampler | null;
     private readonly _dummyDepth: GPUTexture;
     private readonly _dummyHeat: GPUTexture;
     private _previous: GPUTexture | null = null;
@@ -80,9 +106,13 @@ export class WarpingError {
     private _measured = false;
     private _reading = false;
 
-    /** @param device - The device the images live on */
-    constructor(device: GPUDevice) {
+    /**
+     * @param device - The device the images live on
+     * @param options - The resample filter
+     */
+    constructor(device: GPUDevice, options: WarpingErrorOptions = {}) {
         this.device = device;
+        this.resample = resolveWarpingResample(options.resample);
         this._constants = device.createBuffer({ label: 'motion-warp-constants', size: WARPING_CONSTANTS_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
         this._counters = device.createBuffer({
             label: 'motion-warp-counters',
@@ -91,7 +121,7 @@ export class WarpingError {
         });
         this._result = device.createBuffer({ label: 'motion-warp-result', size: WARPING_WORDS * 4, usage: GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
         this._readback = device.createBuffer({ label: 'motion-warp-readback', size: WARPING_WORDS * 4, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
-        this._sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
+        this._sampler = this.resample === 'bilinear' ? device.createSampler({ magFilter: 'linear', minFilter: 'linear' }) : null;
         const dummy = (label: string, format: GPUTextureFormat, usage: number) =>
             device.createTexture({ label, size: { width: 1, height: 1 }, format, usage });
         this._dummyDepth = dummy('motion-warp-dummy-depth', 'r32float', GPUTextureUsage.TEXTURE_BINDING);
@@ -100,11 +130,12 @@ export class WarpingError {
 
     /** Compiles the pipeline. */
     async init(): Promise<void> {
-        const label = 'motion-warp';
+        const label = this.resample === 'bilinear' ? 'motion-warp' : `motion-warp-${this.resample}`;
+        const code = this.resample === 'bilinear' ? WARPING_ERROR_SHADER : warpingErrorShader(this.resample);
         this._pipeline = await this.device.createComputePipelineAsync({
             label,
             layout: 'auto',
-            compute: { module: this.device.createShaderModule({ label, code: WARPING_ERROR_SHADER }), entryPoint: 'main' },
+            compute: { module: this.device.createShaderModule({ label, code }), entryPoint: 'main' },
         });
     }
 
@@ -145,24 +176,20 @@ export class WarpingError {
             this.device.queue.writeBuffer(this._constants, 0, buffer);
 
             const single = (texture: GPUTexture) => texture.createView({ baseMipLevel: 0, mipLevelCount: 1 });
+            const entries: GPUBindGroupEntry[] = [
+                { binding: 0, resource: { buffer: this._constants } },
+                { binding: 1, resource: single(current) },
+                { binding: 2, resource: single(this._previous!) },
+                { binding: 4, resource: single(motion) },
+                { binding: 5, resource: single(depthTest ? this._previousDepth! : this._dummyDepth) },
+                { binding: 6, resource: single(request.heat ?? this._dummyHeat) },
+                { binding: 7, resource: { buffer: this._counters } },
+            ];
+            // Only the bilinear shader samples; Catmull-Rom loads and has no binding 3.
+            if (this._sampler) entries.splice(3, 0, { binding: 3, resource: this._sampler });
             const pass = encoder.beginComputePass({ label: 'motion-warp', timestampWrites: request.timestampWrites });
             pass.setPipeline(this._pipeline);
-            pass.setBindGroup(
-                0,
-                this.device.createBindGroup({
-                    layout: this._pipeline.getBindGroupLayout(0),
-                    entries: [
-                        { binding: 0, resource: { buffer: this._constants } },
-                        { binding: 1, resource: single(current) },
-                        { binding: 2, resource: single(this._previous!) },
-                        { binding: 3, resource: this._sampler },
-                        { binding: 4, resource: single(motion) },
-                        { binding: 5, resource: single(depthTest ? this._previousDepth! : this._dummyDepth) },
-                        { binding: 6, resource: single(request.heat ?? this._dummyHeat) },
-                        { binding: 7, resource: { buffer: this._counters } },
-                    ],
-                }),
-            );
+            pass.setBindGroup(0, this.device.createBindGroup({ layout: this._pipeline.getBindGroupLayout(0), entries }));
             pass.dispatchWorkgroups(Math.ceil(current.width / 8), Math.ceil(current.height / 8));
             pass.end();
         }
