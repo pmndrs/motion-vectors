@@ -1,18 +1,18 @@
 # Motion vectors — spec and plan
 
-**Status (2026-11-19): every phase before 0.1.0 is done, and gate P's checks
-hold. Phase 2 (three node) done; D1 passed; the contract's `.z`/`.w` settled;
+**Status (2026-11-19): 0.1.0, the alpha, is on npm (published by hand,
+`latest`), and the repo is public. Phase 2 (three node) done; D1 passed; the contract's `.z`/`.w` settled;
 pixi-3d adapter built (experimental, [PIXI.md](PIXI.md)); Phase 3 done: cut
 detection on the GPU keyed on depth consistency, motion from depth for three,
 warping error (MOTION.md §9); Phase 4 done: the upscaler dry run and the
-Babylon audit (MOTION.md §10, §11). The release setup is in place (version
-0.1.0, a manual Release workflow). What's left is the maintainer's: make the
-repo public, give the workflow npm access, and run it (gate P). Supported:
-three `>=0.186.0`. Upstream issues are filed after 0.1.0 (Phase 5).** Phases 0
+Babylon audit (MOTION.md §10, §11). Later releases go through the Release
+workflow with trusted publishing, once the maintainer adds the package's
+trusted publisher (gate P). Supported: three `>=0.186.0`. Next is Phase 5:
+the upstream issues are ready to file.** Phases 0
 and 1 ran incubating in [pmndrs/upscaler](https://github.com/pmndrs/upscaler);
 this repo took them over with their history and builds on three **r187**. The
-node meets every §4 oracle case (MOTION.md §8). It will
-publish as `@pmndrs/motion-vectors` at gate P. The evidence this plan builds on
+node meets every §4 oracle case (MOTION.md §8). It is published as
+`@pmndrs/motion-vectors` (gate P). The evidence this plan builds on
 is the motion lab, [MOTION.md](MOTION.md).
 
 ## 1. Why a shared package, in its own repo
@@ -339,7 +339,7 @@ plan's; their branches can serve as dev benches, as the upscaler's did.
 
 **Exit:** Babylon findings recorded. Met 2026-11-19.
 
-### ⛳ P: publish 0.1.0, the alpha (review no later than **2026-12-15**, proposed)
+### ✅ P: publish 0.1.0, the alpha (published 2026-11-19)
 
 Publish when all of these hold (checked 2026-11-19):
 1. ✅ Phase 2, 3 and 4 exits passed.
@@ -353,14 +353,18 @@ Publish when all of these hold (checked 2026-11-19):
    measures its table.
 5. Release setup: ✅ `private` off and version 0.1.0 (CHANGELOG.md); ✅ a
    publish workflow (`.github/workflows/release.yml`, manual dispatch, dry run
-   by default, provenance). Left for the maintainer: make the repository
-   public (npm refuses provenance from a private one); publish 0.1.0 by hand
-   from the terminal (`npm publish --access public` on a clean main, after
-   the checks), which creates the package; then trusted publishing for every
-   later release, no tokens (decided 2026-11-19): an `npm` environment and
-   the package's trusted publisher on npmjs.com (release.yml's header).
+   by default, provenance); ✅ the repository is public (npm refuses
+   provenance from a private one); ✅ 0.1.0 published by hand from the
+   terminal on 2026-11-19 (`npm publish --access public` on a clean main,
+   after the checks), which created the package. Left for the maintainer,
+   before the next release: trusted publishing for every later release, no
+   tokens (decided 2026-11-19): an `npm` environment and the package's
+   trusted publisher on npmjs.com (release.yml's header). npm expires a new
+   trusted publisher that hasn't published within 2 days, so add it shortly
+   before that release.
 
-If one fails: name it, fix it, and set a new review date.
+Exit met 2026-11-19: 0.1.0 is on npm under `latest`, built from main at
+`27d3477`.
 
 ### Phase 5: after 0.1.0
 - Consumers (the upscaler, the denoiser) adopt it from npm as a **peer
@@ -413,7 +417,7 @@ If one fails: name it, fix it, and set a new review date.
 | 2026-11-14 | D1: `positionNode` previous is feasible (graph rebuilt with substituted leaves) | Done (MOTION.md §8) |
 | 2026-11-19 | Phase 4 done: Babylon audited on the deformers objects plus skinning, history and visibility cases; findings in MOTION.md §11, drafts in upstream/babylon.md | Done |
 | 2026-11-19 | Release setup: version 0.1.0, `private` off, a manual Release workflow modelled on the downsampler's (dry run by default, provenance, trusted publishing only: no npm tokens) | Done; publishing is the maintainer's |
-| — | P: publish 0.1.0 (alpha) | Checks pass; waiting on the repo going public, npm access and the Release run |
+| 2026-11-19 | P: publish 0.1.0 (alpha), by hand from the terminal; later releases through the Release workflow with trusted publishing | Done (`latest`, from `27d3477`) |
 | — | D3: optical flow | Pending (Phase 5) |
 
 ## 9. Open questions
@@ -421,7 +425,8 @@ If one fails: name it, fix it, and set a new review date.
 - ~~Name and scope; repo owner.~~ Settled 2026-11-14 (§8): `pmndrs/motion-vectors`,
   scoped like the upscaler and denoiser. `motion` alone collides with the Motion
   animation library; `reprojection` was the alternative for a broader scope.
-  `@pmndrs/motion-vectors` was unpublished on npm that day; claim it at gate P.
+  `@pmndrs/motion-vectors` was unpublished on npm that day; claimed with 0.1.0
+  on 2026-11-19.
 - ~~Downsampler as a dependency or vendored?~~ Settled 2026-11-19: a
   dependency, added when a product first needs it (§3.6).
 - **Second consumer order.** Is the denoiser the right first non-upscaler consumer, or is the GI work closer?

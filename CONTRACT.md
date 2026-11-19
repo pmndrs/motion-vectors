@@ -4,7 +4,7 @@
 producer (an engine's velocity output, our three node, motion from depth) and
 every consumer (the upscaler, the denoiser, GI) agrees a motion vector means. It is checked by the motion lab's
 oracle (`lab/`, `scripts/measure-motion.mjs --check`). The open items at the end
-must be settled before the 0.x publish (gate P in [docs/PLAN.md](docs/PLAN.md)).
+were settled before the 0.1.0 publish (gate P in [docs/PLAN.md](docs/PLAN.md)).
 
 ## The value
 
@@ -129,7 +129,7 @@ This package's three node (`MotionVectors`, 2026-11-14, r187) reads under the
 when the app calls `beginFrame()`; without it, it follows three's frame counter
 and is exact at one render per tick only (docs/MOTION.md §8).
 
-## Open before 0.x
+## Settled before 0.x
 
 - ~~Specify `.z` (flag values) and `.w` (linear depth: view-space or the
   engine's own).~~ Settled 2026-11-17: the flag table and view-space previous

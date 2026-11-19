@@ -4,9 +4,10 @@ Issues we found in engines while building this package. The drafts are ready
 to paste, with editor notes in [brackets]; the table tracks where each one
 stands.
 
-**Filing waits until every phase is done and 0.1.0 is on npm** (decided
-2026-11-19, PLAN.md Phase 5): the drafts link this repo as the repro and the
-reference fix.
+**Filing waited until every phase was done and 0.1.0 was on npm** (decided
+2026-11-19, PLAN.md Phase 5), because the drafts link this repo as the repro
+and the reference fix. Both hold since 2026-11-19 (0.1.0 published, repo
+public), so the drafts can be filed.
 
 | Project | Issue | Draft | Status |
 |---|---|---|---|
