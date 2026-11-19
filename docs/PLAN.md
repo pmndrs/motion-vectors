@@ -354,10 +354,11 @@ Publish when all of these hold (checked 2026-11-19):
 5. Release setup: ✅ `private` off and version 0.1.0 (CHANGELOG.md); ✅ a
    publish workflow (`.github/workflows/release.yml`, manual dispatch, dry run
    by default, provenance). Left for the maintainer: make the repository
-   public (npm refuses provenance from a private one); npm access to the
-   `@pmndrs` scope (an `NPM_TOKEN` in the `npm` environment for the first
-   publish, then trusted publishing); run Release with version `0.1.0`, dry
-   run first.
+   public (npm refuses provenance from a private one); npm access through
+   trusted publishing only, no tokens (decided 2026-11-19): an `npm`
+   environment and a trusted publisher for the package, created with
+   `npm trust github` before the first publish (release.yml's header); run
+   Release with version `0.1.0`, dry run first.
 
 If one fails: name it, fix it, and set a new review date.
 
@@ -411,7 +412,7 @@ If one fails: name it, fix it, and set a new review date.
 | 2026-11-17 | `.z` = `MotionFlag` (0 no surface, 1 exact, 2 camera only, 3 rigid, 4 no previous); `.w` = previous view-space linear depth, 0 when not available | Done (CONTRACT.md) |
 | 2026-11-14 | D1: `positionNode` previous is feasible (graph rebuilt with substituted leaves) | Done (MOTION.md §8) |
 | 2026-11-19 | Phase 4 done: Babylon audited on the deformers objects plus skinning, history and visibility cases; findings in MOTION.md §11, drafts in upstream/babylon.md | Done |
-| 2026-11-19 | Release setup: version 0.1.0, `private` off, a manual Release workflow modelled on the downsampler's (dry run by default, provenance, trusted publishing or a first-publish token) | Done; publishing is the maintainer's |
+| 2026-11-19 | Release setup: version 0.1.0, `private` off, a manual Release workflow modelled on the downsampler's (dry run by default, provenance, trusted publishing only: no npm tokens) | Done; publishing is the maintainer's |
 | — | P: publish 0.1.0 (alpha) | Checks pass; waiting on the repo going public, npm access and the Release run |
 | — | D3: optical flow | Pending (Phase 5) |
 

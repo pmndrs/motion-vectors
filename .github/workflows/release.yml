@@ -8,13 +8,15 @@ name: Release
 #
 # Setup, once (docs/PLAN.md gate P):
 # - The repository must be public: npm refuses provenance from a private one.
-# - npm access: trusted publishing for @pmndrs/motion-vectors (npmjs.com →
-#   package settings → Trusted publisher: GitHub Actions, organization pmndrs,
-#   repository motion-vectors, workflow release.yml, environment npm), which
-#   needs no token. npm only offers that once the package exists, so the first
-#   publish needs an npm token with publish rights to the @pmndrs scope in the
-#   `npm` environment's NPM_TOKEN secret (remove it after switching to trusted
-#   publishing). Optionally, required reviewers on the `npm` environment.
+# - npm access: trusted publishing only, no tokens. A GitHub environment named
+#   `npm` (optionally with required reviewers), and a trusted publisher for
+#   @pmndrs/motion-vectors: GitHub Actions, repository pmndrs/motion-vectors,
+#   workflow release.yml, environment npm. Before the package exists, npm 11.10+
+#   can create it from the CLI (logged in with publish rights to @pmndrs):
+#     npx npm@latest trust github @pmndrs/motion-vectors --file release.yml \
+#       --repo pmndrs/motion-vectors --env npm --allow-publish
+#   Afterwards it is also on npmjs.com → package settings → Trusted publisher.
+#   npm expires a new trusted publisher that hasn't published within 2 days.
 on:
   workflow_dispatch:
     inputs:
@@ -73,9 +75,9 @@ jobs:
       - run: npm run verify:pack
       - name: List the package contents
         run: npm pack --dry-run
+      # Trusted publishing: npm exchanges the job's OIDC token, no secret involved.
       - name: Publish
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           DIST_TAG: ${{ inputs.dist-tag }}
           DRY_RUN: ${{ inputs.dry-run }}
         run: |
