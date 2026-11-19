@@ -58,12 +58,14 @@ describe('warping error shader structure', () => {
 describe('warping error resample option', () => {
     it('defaults to bilinear and accepts every listed filter', () => {
         expect(resolveWarpingResample(undefined)).toBe('bilinear');
+        expect(resolveWarpingResample(null)).toBe('bilinear');
+        expect(Object.isFrozen(WARPING_RESAMPLE_FILTERS)).toBe(true);
         expect(WARPING_RESAMPLE_FILTERS).toEqual(['bilinear', 'catmull-rom']);
         for (const name of WARPING_RESAMPLE_FILTERS) expect(resolveWarpingResample(name)).toBe(name);
     });
 
     it('rejects anything else, before touching the device', () => {
-        for (const value of ['lanczos2', 'Catmull-Rom', 'bicubic', '', null, 1]) expect(() => resolveWarpingResample(value)).toThrow(/resample must be one of/);
+        for (const value of ['lanczos2', 'Catmull-Rom', 'bicubic', '', 1, {}]) expect(() => resolveWarpingResample(value)).toThrow(/resample must be one of/);
         // An empty device object: the option is checked before any GPU call.
         expect(() => new WarpingError({} as GPUDevice, { resample: 'bicubic' as never })).toThrow(/resample must be one of 'bilinear', 'catmull-rom'/);
     });
@@ -80,16 +82,21 @@ describe('warping error resample option', () => {
             createSampler: () => created.push('sampler'),
         } as unknown as GPUDevice;
         expect(new WarpingError(device).resample).toBe('bilinear');
-        expect(created).toEqual(['sampler']);
+        expect(new WarpingError(device, null).resample).toBe('bilinear');
+        expect(created).toEqual(['sampler', 'sampler']);
         expect(new WarpingError(device, { resample: 'catmull-rom' }).resample).toBe('catmull-rom');
-        expect(created).toEqual(['sampler']);
+        expect(created).toEqual(['sampler', 'sampler']);
     });
 });
 
 describe('catmull-rom warping shader', () => {
     const code = warpingErrorShader('catmull-rom');
 
-    it('keeps the default shader byte-for-byte (bilinear is unchanged)', () => {
+    it('keeps the default shader byte-for-byte (bilinear is unchanged)', async () => {
+        // Golden: SHA-256 of 0.1.0's WARPING_ERROR_SHADER (3524 characters).
+        expect(WARPING_ERROR_SHADER.length).toBe(3524);
+        const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(WARPING_ERROR_SHADER)));
+        expect([...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('')).toBe('e0499f547861bc1259002a0d47dc60dea9b927ba99bee8e727cc8956f508c4b3');
         expect(warpingErrorShader()).toBe(WARPING_ERROR_SHADER);
         expect(warpingErrorShader('bilinear')).toBe(WARPING_ERROR_SHADER);
         expect(WARPING_ERROR_SHADER).toMatch(/textureSampleLevel\(previous, linearSampler, prevUV, 0\.0\)/);

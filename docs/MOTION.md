@@ -658,9 +658,10 @@ hold. Why this form:
   weights. The 5-tap form also drops the corner taps. Loads take any format:
   `rgba32float` binds without `float32-filterable` (bilinear can't, and fails
   validation there).
-- **Deringed.** On hard edges the clamp cuts the error 26–34 % (checker
-  0.0220 → 0.0162). It costs 0.00003 on smooth detail and up to 10 % on
-  fine detail.
+- **Deringed.** On hard edges the clamp cuts the error 26–30 % (checker
+  0.0220 → 0.0162, edges 0.00278 → 0.00195). It costs 0.00003 on smooth
+  detail and up to 18 % on fine detail (0.00033 → 0.00039 at ≤ 0.18
+  cycles/px).
 - **Not Lanczos-2.** Measured and dropped: normalized Lanczos-2 reproduces only
   constants, Catmull-Rom reproduces quadratics. On smooth detail Lanczos-2 read
   4.7× Catmull-Rom's error (0.00047 against 0.00010), it read at most 8 %

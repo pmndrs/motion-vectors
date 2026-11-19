@@ -17,21 +17,22 @@ export const WARPING_FLAG_HEAT = 2;
  *   less stable than soft ones. Needs a filterable format (`rgba32float` only
  *   with `float32-filterable`).
  * - `'catmull-rom'`: exact 16-tap (4×4) bicubic Catmull-Rom, deringed to the
- *   nearest 2×2 texels. Interpolating and exact on quadratics, so it keeps the
- *   detail a bilinear tap blurs away. It reads texels with `textureLoad`, so it
+ *   nearest 2×2 texels. Interpolating, and the filter is exact on
+ *   quadratics (except where the deringing clamp cuts off an extremum between
+ *   texels), so it keeps the detail a bilinear tap blurs away. It reads texels with `textureLoad`, so it
  *   takes any float-sampled color format, filterable or not.
  */
 export type WarpingResample = 'bilinear' | 'catmull-rom';
 /** Every {@link WarpingResample}. */
-export const WARPING_RESAMPLE_FILTERS: readonly WarpingResample[] = ['bilinear', 'catmull-rom'];
+export const WARPING_RESAMPLE_FILTERS: readonly WarpingResample[] = Object.freeze(['bilinear', 'catmull-rom'] as const);
 
 /**
  * Checks a resample option (JavaScript callers get no type check).
- * @param value - The option as given; `undefined` selects `'bilinear'`
+ * @param value - The option as given; `undefined` or `null` selects `'bilinear'`
  * @returns The filter
  */
 export function resolveWarpingResample(value: unknown): WarpingResample {
-    if (value === undefined) return 'bilinear';
+    if (value === undefined || value === null) return 'bilinear';
     if (typeof value === 'string' && (WARPING_RESAMPLE_FILTERS as readonly string[]).includes(value)) return value as WarpingResample;
     throw new Error(`WarpingError: resample must be one of ${WARPING_RESAMPLE_FILTERS.map((name) => `'${name}'`).join(', ')}; got ${JSON.stringify(value)}.`);
 }

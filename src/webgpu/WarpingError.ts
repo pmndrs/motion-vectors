@@ -108,11 +108,11 @@ export class WarpingError {
 
     /**
      * @param device - The device the images live on
-     * @param options - The resample filter
+     * @param options - The resample filter (`null` or omitted: the defaults)
      */
-    constructor(device: GPUDevice, options: WarpingErrorOptions = {}) {
+    constructor(device: GPUDevice, options: WarpingErrorOptions | null = {}) {
         this.device = device;
-        this.resample = resolveWarpingResample(options.resample);
+        this.resample = resolveWarpingResample(options?.resample);
         this._constants = device.createBuffer({ label: 'motion-warp-constants', size: WARPING_CONSTANTS_BYTES, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
         this._counters = device.createBuffer({
             label: 'motion-warp-counters',
