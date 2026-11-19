@@ -81,6 +81,7 @@
         "build:examples": "vite build --config examples/vite.config.ts --outDir ../examples-dist --emptyOutDir",
         "measure": "node scripts/measure-motion.mjs",
         "check:gpu": "node scripts/measure-motion.mjs --experiments oracle,cases,jitter,node --check",
+        "measure:resample": "node scripts/measure-resample.mjs --check",
         "verify:pack": "node scripts/verify-pack.mjs",
         "check:pixi": "node scripts/check-pixi.mjs",
         "audit:babylon": "node scripts/audit-babylon.mjs"
