@@ -354,11 +354,11 @@ Publish when all of these hold (checked 2026-11-19):
 5. Release setup: ✅ `private` off and version 0.1.0 (CHANGELOG.md); ✅ a
    publish workflow (`.github/workflows/release.yml`, manual dispatch, dry run
    by default, provenance). Left for the maintainer: make the repository
-   public (npm refuses provenance from a private one); npm access through
-   trusted publishing only, no tokens (decided 2026-11-19): an `npm`
-   environment and a trusted publisher for the package, created with
-   `npm trust github` before the first publish (release.yml's header); run
-   Release with version `0.1.0`, dry run first.
+   public (npm refuses provenance from a private one); publish 0.1.0 by hand
+   from the terminal (`npm publish --access public` on a clean main, after
+   the checks), which creates the package; then trusted publishing for every
+   later release, no tokens (decided 2026-11-19): an `npm` environment and
+   the package's trusted publisher on npmjs.com (release.yml's header).
 
 If one fails: name it, fix it, and set a new review date.
 
