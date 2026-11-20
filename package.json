@@ -1,6 +1,6 @@
 {
     "name": "@pmndrs/motion-vectors",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "description": "Motion vectors for any WebGPU pipeline: a written contract, camera motion from depth, an exact oracle-based audit of an engine's velocity, and cut detection. Engine agnostic, with a three.js adapter.",
     "type": "module",
     "license": "MIT",
