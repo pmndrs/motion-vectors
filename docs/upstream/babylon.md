@@ -4,9 +4,8 @@ Three drafts, one per issue, written to stand alone. Editor notes are in
 [brackets]: remove them before filing.
 
 [Before filing:
-- File after `@pmndrs/motion-vectors` 0.1.0 is on npm (PLAN.md Phase 5), so the
-  issues can link the audit as the repro. Until then the repo is private and
-  every link below would 404.
+- 0.1.0 is on npm and the repo is public (2026-11-19, PLAN.md Phase 5), so
+  the links to the audit, the repro, resolve.
 - Every number is from docs/MOTION.md §11: Babylon.js **9.31.0**, WebGPU,
   Apple Metal, 1280×720, frame graph geometry renderer, linear velocity, mean
   endpoint error in render pixels against exact motion. Re-run
