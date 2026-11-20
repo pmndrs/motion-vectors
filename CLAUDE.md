@@ -16,6 +16,7 @@ npm run examples    # example gallery, Vite, :5612 (imports the package by name 
 npm run lab         # Vite, :5611
 npm run measure     # every lab experiment on the real GPU (headless Chrome + CDP)
 npm run check:gpu   # conformance bars; CI runs it with --adapter swiftshader --width 640 --height 360
+npm run measure:resample # WarpingError's resample filters on exact sub-pixel translations (lab/resample.html)
 npm run check:pixi  # pixi-3d adapter vs analytic motion (examples/pixi-compare?check=1); CI runs it on SwiftShader
 npm run audit:babylon # Babylon's own velocity vs exact motion (lab/babylon.html); controls must read exact
 ```
