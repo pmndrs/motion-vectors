@@ -171,6 +171,20 @@ const { meanError, scored, occluded } = await warping.read();
   storage texture for a per-pixel map.
 - Read `meanError` together with `scored`: a field that leaves more pixels to
   the mask covers less of the image.
+- **Sharp images read less stable under bilinear.** The previous image is
+  resampled bilinearly by default, which blurs it on any motion that isn't a
+  whole number of pixels, so a sharp output scores worse than a soft one that
+  flickers no less. To compare outputs of different sharpness (native, a
+  supersampled reference, an upscale), construct with
+  `new WarpingError(device, { resample: 'catmull-rom' })`: an exact 4×4
+  Catmull-Rom, 14–17× less bias on smooth detail and 2–4× less on fine
+  detail, ~2.3× the pass cost (121 µs against 54 µs at 1280×720). Hard
+  geometric edges keep most of their bias with any filter, so confirm
+  cross-sharpness rankings against a reference
+  ([docs/MOTION.md](docs/MOTION.md) §9, "Resampling bias"). Keep the default
+  for A/Bs of one output and for continuity with earlier numbers.
+  `'catmull-rom'` also takes `rgba32float` without `float32-filterable`;
+  `'bilinear'` needs a filterable format.
 
 ## pixi-3d (experimental)
 
@@ -230,6 +244,7 @@ npm install
 npm run lab        # http://localhost:5611 (Chrome/Edge with WebGPU)
 npm run measure    # every experiment, headless over CDP, exact GPU readback (~2.5 min)
 npm run check:gpu  # the conformance bars; add -- --adapter swiftshader for no GPU
+npm run measure:resample  # WarpingError's resample filters on exact sub-pixel translations (~1 min)
 ```
 
 Results land in `results/<label>/` (gitignored).

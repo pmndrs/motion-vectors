@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.1 (2026-11-20)
+
+### `@pmndrs/motion-vectors/webgpu`
+
+- `WarpingError` takes `{ resample: 'bilinear' | 'catmull-rom' }` at
+  construction (`WarpingErrorOptions`, `WarpingResample`,
+  `WARPING_RESAMPLE_FILTERS`). `'bilinear'`, the default, is unchanged. Its
+  blur of the previous frame under sub-pixel motion makes sharp images read
+  less stable. `'catmull-rom'` (16-tap, deringed) cuts that bias 14–17× on
+  smooth detail and works on unfilterable formats (docs/MOTION.md §9,
+  "Resampling bias").
+
+### Lab
+
+- `npm run measure:resample` (`lab/resample.html`,
+  `scripts/measure-resample.mjs`): each resample filter on exact sub-pixel
+  translations of synthetic images, with and without genuine flicker.
+
 ## 0.1.0 (alpha)
 
 The first release. The API may still change before 1.0; the motion contract

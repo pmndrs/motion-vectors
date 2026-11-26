@@ -10,7 +10,9 @@ export type { CameraMatrices } from './MotionFromDepth.js';
 export { CutDetector, decodeCutResult } from './CutDetector.js';
 export type { CutRequest, CutResult } from './CutDetector.js';
 export { WarpingError, decodeWarpingResult } from './WarpingError.js';
-export type { WarpingRequest, WarpingResult } from './WarpingError.js';
+export type { WarpingErrorOptions, WarpingRequest, WarpingResult } from './WarpingError.js';
+export { WARPING_RESAMPLE_FILTERS } from './shaders/warpingError.js';
+export type { WarpingResample } from './shaders/warpingError.js';
 export type {
     CandidateStats,
     CompareCandidateStats,

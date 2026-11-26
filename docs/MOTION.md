@@ -23,7 +23,8 @@ No optical flow yet. That is deliberately gated on the results here (§8).
 | `MotionFromDepth` | `src/webgpu/MotionFromDepth.ts` | The camera-motion pass as a product: matrices and depth history in, the contract texture and linear depth out (§9). |
 | Cut detector | `src/webgpu/CutDetector.ts`, `shaders/cutDetection.ts` | The depth-consistency share reduced to a 1×1 flag on the GPU, no readback (§9). |
 | `MotionFromDepthPass` | `src/three/MotionFromDepthPass.ts` | Motion from depth and the cut detector fed from a three depth texture and camera (§9). |
-| Warping error | `src/webgpu/WarpingError.ts`, `shaders/warpingError.ts` | §5's metric for benches: one motion field, its own history, the mask on the field's `.w` (§9). |
+| Warping error | `src/webgpu/WarpingError.ts`, `shaders/warpingError.ts` | §5's metric for benches: one motion field, its own history, the mask on the field's `.w`, a bilinear or Catmull-Rom resample of the previous image (§9). |
+| Resample meter | `lab/resample.html`, `scripts/measure-resample.mjs` | Synthetic images under exact sub-pixel translation, judged by `WarpingError` per resample filter: the filter's own bias, with and without genuine flicker (§9, "Resampling bias"). |
 | `MotionAnalyzer` | `src/webgpu/MotionAnalyzer.ts` | Engine-free orchestration of the lab's passes on a bare `GPUDevice` (its own copy of the `TextureAllocator` seam); motion from depth is a `MotionFromDepth` it owns. |
 | Motion lab | `lab/` | The package's own scenes (deformers, move-then-hold cases, water, a courtyard camera track and a cut timeline) with oracle materials. No upscaler. |
 | Lab driver | `scripts/measure-motion.mjs` | Experiments `oracle`, `deformers`, `cases`, `ticks`, `jitter`, `water`, `track`, `cuts`, `warp`, `node`, `cost`, plus `probe`. |
@@ -634,6 +635,90 @@ doesn't run it; CI's existing shards do run the agreement bars.
 runs (54.9 µs in the other). That covers the compute pass only, not the two
 history copies. It is a measurement, so a bench pays it only while measuring.
 
+### Resampling bias (2026-11-20)
+
+**The bilinear warp rewards blur.** It resamples the previous image with one
+bilinear tap, which low-passes it on any motion that isn't a whole number of
+pixels. A sharp image then differs from its warped predecessor even when
+nothing flickers, and a soft one hardly does. The upscaler bench found it on
+Q19 (ratio 2, its NEXT-STEPS §17): a 2×2-supersampled reference, the most
+stable image there is, read 0.00462 under motion against 0.00177 for the
+softer temporal upscale. Holds read exactly 0 for every path, because no
+motion means no resampling. §5's cross-path ranking under motion is therefore
+partly a sharpness ranking.
+
+`new WarpingError(device, { resample: 'catmull-rom' })` resamples with an
+exact 4×4 Catmull-Rom instead: 16 `textureLoad` taps, deringed by clamping to
+the 2×2 texels a bilinear tap would blend. `'bilinear'` stays the default and
+is unchanged byte for byte, so the lab's agreement bars with the audit still
+hold. Why this form:
+
+- **16 loads, not the 5- or 9-tap bilinear-optimized forms.** Those need
+  hardware filtering, so a filterable format, and they inherit its fixed-point
+  weights. The 5-tap form also drops the corner taps. Loads take any format:
+  `rgba32float` binds without `float32-filterable` (bilinear can't, and fails
+  validation there).
+- **Deringed.** On hard edges the clamp cuts the error 26–30 % (checker
+  0.0220 → 0.0162, edges 0.00278 → 0.00195). It costs 0.00003 on smooth
+  detail and up to 18 % on fine detail (0.00033 → 0.00039 at ≤ 0.18
+  cycles/px).
+- **Not Lanczos-2.** Measured and dropped: normalized Lanczos-2 reproduces only
+  constants, Catmull-Rom reproduces quadratics. On smooth detail Lanczos-2 read
+  4.7× Catmull-Rom's error (0.00047 against 0.00010), it read at most 8 %
+  lower above 0.25 cycles/px, and it cost 40 % more (190 µs against 137 µs,
+  same run).
+
+`npm run measure:resample` (`lab/resample.html`, a bare device) renders
+synthetic images, 4×4 box-supersampled, translating by an exact offset per
+frame. It judges them through that exact motion, frames 1–15 pooled,
+1280×720, Metal. With nothing flickering, any error is the filter's own:
+
+| Image, motion (px/frame) | Bilinear | Catmull-Rom | Catmull-Rom, no dering |
+|---|---|---|---|
+| Zone plate ≤ 0.125 cycles/px, (0.37, 0.21) | 0.00139 | **0.00010** | 0.00007 |
+| … (0.5, 0) | 0.00086 | **0.00005** | 0.00002 |
+| … (2.3, −1.4) | 0.00157 | **0.00010** | 0.00007 |
+| Zone plate ≤ 0.18, (0.37, 0.21) | 0.00278 | **0.00039** | 0.00033 |
+| Zone plate ≤ 0.25, (0.37, 0.21) | 0.00504 | **0.00115** | 0.00105 |
+| Zone plate ≤ 0.35, (0.37, 0.21) | 0.00876 | **0.00321** | 0.00309 |
+| Zone plate ≤ 0.45, (0.37, 0.21) | 0.01245 | **0.00639** | 0.00629 |
+| Checker, 8 px squares, (0.37, 0.21) | 0.01931 | **0.01621** | 0.02200 |
+| Vertical edges every 32 px, (0.25, 0) | 0.00221 | **0.00195** | 0.00278 |
+| Checker, (1, 0), whole pixel | 0 | 0 | 0 |
+| Zone plate ≤ 0.35, still | 0 | 0 | 0 |
+| *Flicker:* zone plate ≤ 0.125 + per-pixel noise ±0.05 | 0.01312 | 0.01385 | 0.01388 |
+| *Flicker:* zone plate ≤ 0.125, brightness ±5 % per frame | 0.02145 | 0.02134 | 0.02134 |
+| *Flicker:* checker + noise ±0.05, still | 0.01840 | 0.01840 | 0.01840 |
+
+- **Smooth detail reads near zero**: 14–17× below bilinear at ≤ 0.125
+  cycles/px. The bias grows with frequency for any four-tap kernel
+  (Catmull-Rom's response at a half-pixel shift is 0.88 at 0.25 cycles/px and
+  0.63 at 0.35; bilinear's is 0.71 and 0.45), so fine detail keeps 2–4× less
+  bias than bilinear, not none.
+- **Hard edges keep most of it.** A box-filtered step isn't band-limited:
+  under sub-pixel motion its coverage values are not a resample of last
+  frame's by any interpolator. Catmull-Rom cuts that floor by only 11–16 %.
+  Geometry edges are a large part of a rendered frame, so outputs of
+  different sharpness still don't compare cleanly on raw warping error.
+- **Flicker still reads** with either filter: noise on the smooth zone plate
+  reads 0.0131 / 0.0139 against the steady 0.0014 / 0.0001. Bilinear reads it
+  slightly lower because it averages the previous frame's noise.
+- SwiftShader at 640×360 repeats every row to within 3 %.
+
+**Cost**, Metal, 1280×720, 256 frames per filter, interleaved, no readback
+between frames (shared GPU): bilinear 53.8 µs median, Catmull-Rom 121.3 µs.
+
+**When to choose which:** keep `'bilinear'` to compare runs of the same
+output (an A/B of one path, onset against steady state), and to stay
+comparable with numbers recorded before this option. Use `'catmull-rom'`
+when the outputs differ in sharpness (native, a supersampled reference, a
+temporal upscale), or when the image is `rgba32float` without
+`float32-filterable`. To take sharpness out entirely, warp each output's
+error against a common reference rather than the output itself (the
+upscaler's `--warp error`, NEXT-STEPS §17). That still resamples, but now it
+resamples the error signal, which is mostly low-frequency, where Catmull-Rom
+is near exact.
+
 ## 10. Phase 4: the upscaler bench (2026-11-18)
 
 A pre-release dry run, using a branch of the upscaler as a dev bench
@@ -778,7 +863,8 @@ ships.
    still-scene convergence meters, so regressions under motion stop depending
    on eyeballing. The upscaler bench runs it per path, judged through the node
    (§10). What's left is wiring it into the upscaler's regular benchmark
-   runs.
+   runs, with `resample: 'catmull-rom'` wherever paths of different
+   sharpness are compared (§9, "Resampling bias").
 4. **File upstream #17/#18** with this lab as the repro.
 5. **Optical flow (FidelityFX OF port)** is now justified only for what §2's
    shadow case shows: shading motion and inputs with no velocity at all
